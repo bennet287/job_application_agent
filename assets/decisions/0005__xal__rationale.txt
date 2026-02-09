@@ -1,0 +1,61 @@
+DECISION RATIONALE v2.1
+======================================================================
+
+Application ID: APP-0005-xal
+Timestamp: 2026-02-08T23:08:04.591297
+Company: XAL
+Role: Junior Project Manager (m/w/d)
+
+DECISION FRAMEWORK CONTEXT
+-------------------------
+Version: v2.1
+Effort class: standard
+
+MATCH ASSESSMENT
+----------------
+Score: 6/10
+Confidence: medium
+Recommendation: apply with caution
+Is exploration: False
+
+Key Gaps:
+
+Unlearnable Gaps:
+  - direct experience in Lichttechnik or related area
+  - ERP software expertise
+
+DECISION
+--------
+Applied: YES
+
+Applied Because:
+Strong leverage points: candidate's relevant skills can be developed with training, candidate's Master's degree demonstrates strong academic background
+
+STRATEGIC REFLECTION
+--------------------
+(Complete after outcome known)
+
+What worked:
+  [To be completed]
+
+What to change next time:
+  [To be completed]
+
+LLM CONTEXT
+-----------
+Model: unknown
+Temperature: unknown
+Prompt version: unknown
+
+INTERPRETATION GUIDE
+-------------------
+This rationale was written under framework v2.1.
+
+Version history:
+- v1.x: Early EU market entry, high exploration
+- v2.0: Post-interview recalibration, quality over volume
+- v2.1: Added effort class decoupling, fatigue circuit breaker
+
+======================================================================
+IMMUTABLE RECORD - DO NOT EDIT AFTER CREATION
+======================================================================

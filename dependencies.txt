@@ -1,0 +1,17 @@
+# Core
+click>=8.0.0
+requests>=2.28.0
+beautifulsoup4>=4.11.0
+python-docx>=0.8.11
+sqlalchemy>=2.0.0
+
+# Browser automation
+selenium>=4.0.0
+webdriver-manager>=3.8.0
+
+# LLM (choose one or both)
+# For local: ollama (system package)
+# For cloud: openai
+
+# PDF conversion (system dependency)
+# LibreOffice: sudo apt-get install libreoffice

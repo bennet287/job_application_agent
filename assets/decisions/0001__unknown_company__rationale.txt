@@ -1,0 +1,60 @@
+DECISION RATIONALE v2.1
+======================================================================
+
+Application ID: APP-0001-unknown_company
+Timestamp: 2026-02-08T17:02:52.231495
+Company: None
+Role: Senior Technical Project Manager
+
+DECISION FRAMEWORK CONTEXT
+-------------------------
+Version: v2.1
+Effort class: light
+
+MATCH ASSESSMENT
+----------------
+Score: 5/10
+Confidence: low
+Recommendation: unknown
+Is exploration: False
+
+Key Gaps:
+
+Unlearnable Gaps:
+  None
+
+DECISION
+--------
+Applied: YES
+
+Applied Because:
+Score indicated viable match with manageable gaps.
+
+STRATEGIC REFLECTION
+--------------------
+(Complete after outcome known)
+
+What worked:
+  [To be completed]
+
+What to change next time:
+  [To be completed]
+
+LLM CONTEXT
+-----------
+Model: unknown
+Temperature: unknown
+Prompt version: unknown
+
+INTERPRETATION GUIDE
+-------------------
+This rationale was written under framework v2.1.
+
+Version history:
+- v1.x: Early EU market entry, high exploration
+- v2.0: Post-interview recalibration, quality over volume
+- v2.1: Added effort class decoupling, fatigue circuit breaker
+
+======================================================================
+IMMUTABLE RECORD - DO NOT EDIT AFTER CREATION
+======================================================================
