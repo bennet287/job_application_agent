@@ -1,413 +1,449 @@
-I'll create a comprehensive README.md file for your project and help you add it to git.
 
-## Create README.md
+# Create comprehensive final documentation
 
-Save this as `README.md` in your project root:
+final_docs = """
 
-```markdown
-# Job Application Agent v2.1
+# JOB APPLICATION AGENT - FINAL IMPLEMENTATION
 
-> **CV is the Bible. User is God.**  
-> An automated job application system that extracts facts from your CV and generates tailored applications with human oversight at every step.
+## Complete System Documentation v2.0
 
 ---
 
-## 🎯 Philosophy
+## 1. FINAL SYSTEM ARCHITECTURE
 
-- **CV = Source of Truth**: All personal info, experience, and achievements extracted directly from your CV
-- **No Hallucination**: Cover letters use only CV facts, validated before display
-- **Human Control**: User confirms/edits at every step (JD facts, score, CV changes, cover letter)
-- **Audit Trail**: All decisions logged with rationale
-
----
-
-## ✨ Features
-
-| Component | Status | Description |
-|-----------|--------|-------------|
-| **CV Parser** | ✅ Working | Extracts name, email, phone, degrees, experience, achievements from `master_cv.docx` |
-| **JD Processor** | ✅ Working | Scrapes job URLs, extracts company, role, requirements using LLM |
-| **Match Scorer** | ✅ Working | Scores fit 1-10 based on CV facts vs job requirements |
-| **Cover Letter Generator** | ✅ Working | Generates 3 variants (full/compress/truncate) with CV facts only |
-| **CV Tailoring** | ⚠️ Basic | Returns master CV (full surgical editing disabled for stability) |
-| **Browser Automation** | ⚠️ Partial | Opens browser, pre-fills data where possible |
-| **Database Logging** | ✅ Working | Logs all applications to SQLite with full audit trail |
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-```bash
-pip install -r requirements.txt
 ```
-
-### Setup
-```bash
-# Initialize database and permissions
-python main.py setup
-
-# Place your CV
-cp your_cv.docx assets/master_cv.docx
-```
-
-### Run
-```bash
-# Process a job URL
-python main.py process "https://example.com/job-posting"
-
-# Or paste JD text
-python main.py process "pasted:Job title... Requirements..."
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         JOB APPLICATION AGENT                               │
+│                    CV-Centric, AI-Enhanced Automation                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │   INPUT     │───▶│   PROCESS   │───▶│   GENERATE  │───▶│   OUTPUT    │  │
+│  │             │    │             │    │             │    │             │  │
+│  │ • URL       │    │ • Parse JD  │    │ • CV Tailor │    │ • Cover Ltr │  │
+│  │ • Pasted    │    │ • Score     │    │ • Letters   │    │ • CV Variant│  │
+│  │   Text      │    │ • Validate  │    │ • Browser   │    │ • Logs      │  │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+│         │                  │                  │                  │          │
+│         ▼                  ▼                  ▼                  ▼          │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    SINGLE SOURCE OF TRUTH: MASTER CV                 │   │
+│  │              (Immutable, Versioned, Permission-Protected)            │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    AI/LLM LAYER (Hybrid)                             │   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │   │
+│  │  │  Rule-Based  │──│  LLM Client  │──│  AI Fallback │              │   │
+│  │  │  (Fast 90%)  │  │ (Gemini/     │  │  (Robust)    │              │   │
+│  │  │              │  │  Ollama)     │  │              │              │   │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘              │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📋 Workflow
-
-1. **Load CV** → Extract facts (name, email, phone, exp, degrees, achievements)
-2. **Scrape JD** → Parse requirements, company, role
-3. **User Verification** → Confirm/edit extracted JD facts
-4. **Score Match** → Rate fit 1-10 (CV vs JD requirements)
-5. **User Approval** → Confirm score and proceed
-6. **Generate Cover Letter** → Create variants using CV facts only
-7. **User Selection** → Choose/edit final cover letter
-8. **Browser Automation** → Open application form, pre-fill data
-9. **Manual Submit** → User reviews and clicks submit
-10. **Log Application** → Record to database with full rationale
-
----
-
-## 🏗️FINAL SYSTEM  Architecture
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           USER INPUT LAYER                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │
-│  │  Job URL        │  │  Pasted JD Text │  │  master_cv.docx         │  │
-│  │  (https://...)  │  │  (raw text)     │  │  (SOURCE OF TRUTH)      │  │
-│  └────────┬────────┘  └────────┬────────┘  └─────────────────────────┘  │
-│           │                    │                                         │
-│           └────────────────────┘                                         │
-│                      │                                                   │
-│                      ▼                                                   │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │                    INPUT PROCESSOR (JD)                          │    │
-│  │  • Scrape (if URL)  • Parse structure  • Extract requirements    │    │
-│  │  Output: Structured JD with company, role, must-haves            │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                      │                                                   │
-└──────────────────────┼───────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         DECISION ENGINE                                 │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │                    MATCH SCORER (Simple Algorithm)               │    │
-│  │  • Score fit (1-10) based on CV facts vs JD requirements         │    │
-│  │  • Experience years + Degree relevance                           │    │
-│  │  • 15% exploration rate for learning                             │    │
-│  │  Output: Score, effort class, proceed/reject                     │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                      │                                                   │
-│           ┌──────────┴──────────┐                                       │
-│           ▼                     ▼                                       │
-│  ┌─────────────┐       ┌─────────────────┐                             │
-│  │  AUTO-REJECT │       │  PROCEED        │                             │
-│  │  (log only)  │       │  TO GENERATION  │                             │
-│  └─────────────┘       └─────────────────┘                             │
-│                                   │                                     │
-└───────────────────────────────────┼─────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      CONTENT GENERATION LAYER                           │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │         ADAPTIVE COVER LETTER GENERATOR (CV-Facts Only)          │    │
-│  │                                                                  │    │
-│  │  Input: CV facts (name, exp, degrees, achievements)              │    │
-│  │  Process:                                                        │    │
-│  │    1. Generate full variant (300 words)                          │    │
-│  │    2. Generate compress variant (150 words)                      │    │
-│  │    3. Generate truncate variant (50 words)                       │    │
-│  │    4. Validate against CV facts (no hallucination)               │    │
-│  │    5. Human selects variant                                      │    │
-│  │    6. Optional human edit                                        │    │
-│  │                                                                  │    │
-│  │  Output: Length-verified cover letter                            │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                      │                                                   │
-│                      ▼                                                   │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │              CV TAILORING (Basic - Returns Master)               │    │
-│  │  • Extract bullets from master_cv.docx                           │    │
-│  │  • (Full surgical editing disabled for stability)                │    │
-│  │  Output: master_cv.pdf or tailored version                       │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                      │                                                   │
-└──────────────────────┼───────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      HUMAN DECISION GATES                               │
-│                                                                         │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │
-│  │ JD Facts Verify │  │ Cover Letter    │  │ Final Review            │  │
-│  │ (edit/confirm)  │  │ Select + Edit   │  │ "Ready to submit?"      │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────────────┘  │
-│                      │                                                   │
-│                      ▼                                                   │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │              DECISION RATIONALE (Immutable Record)               │    │
-│  │  File: assets/decisions/{id}__{company}__rationale.txt           │    │
-│  │  Contents: Score, gaps, CV facts used, LLM context               │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                      │                                                   │
-└──────────────────────┼───────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      SUBMISSION LAYER                                   │
-│                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │              BROWSER AUTOMATION (Assist Mode)                    │    │
-│  │                                                                  │    │
-│  │  • Open application URL in default browser                       │    │
-│  │  • Copy cover letter to clipboard                                │    │
-│  │  • Display CV file path                                          │    │
-│  │  • User manually fills form (natural typing entropy)             │    │
-│  │  • User clicks submit                                            │    │
-│  │                                                                  │    │
-│  │  DOES NOT: Auto-fill forms (prevents bot detection)              │    │
-│  │                                                                  │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                      │                                                   │
-│                      ▼                                                   │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │              HUMAN SUBMISSION CONFIRMATION                       │    │
-│  │  User presses ENTER after submitting to log outcome              │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
-│                      │                                                   │
-└──────────────────────┼───────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      PERSISTENCE LAYER                                  │
-│                                                                         │
-│  ┌─────────────────────────┐  ┌─────────────────────────────────────┐   │
-│  │      SQLITE DATABASE    │  │           FILE SYSTEM               │   │
-│  │    (applications.db)    │  │                                     │   │
-│  │                         │  │  assets/                            │   │
-│  │  Tables:                │  │    ├── master_cv.docx (600)         │   │
-│  │    • applications       │  │    ├── master_cv.pdf (600)          │   │
-│  │    • decision_rationales│  │    ├── cv_versions/ (700)           │   │
-│  │    • schema_version     │  │    ├── cover_letters/ (700)         │   │
-│  │                         │  │    └── decisions/ (700)             │   │
-│  │  Tracks:                │  │                                     │   │
-│  │    • All inputs/outputs │  │  permissions: 600/644/700/755       │   │
-│  │    • Match scores       │  │                                     │   │
-│  │    • CV facts used      │  │                                     │   │
-│  │    • Cover letters      │  │                                     │   │
-│  │    • Submission status  │  │                                     │   │
-│  └─────────────────────────┘  └─────────────────────────────────────┘   │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-
-
- FINAL DIRECTORY STRUCTURE
-
-job_application_agent/                 # 755 (project root)
-├── config/                            # 755
-│   ├── **init**.py                    # 644
-│   ├── settings.py                    # 600 (API keys, paths)
-│   └── prompts.py                     # 644 (escaped JSON prompts)
-│
-├── core/                              # 755
-│   ├── **init**.py                    # 644
-│   ├── jd_processor.py                # 644 (URL scrape + LLM parse)
-│   ├── match_scorer.py                # 644 (simple algorithm)
-│   ├── cover_letter.py                # 644 (CV-fact-based generation)
-│   ├── cv_surgical_editor.py          # 644 (basic CV handling)
-│   ├── decision_rationale.py          # 644 (logging)
-│   ├── form_filler.py                 # 644 (browser assist)
-│   ├── validators.py                  # 644 (CV validation)
-│   └── fatigue_monitor.py             # 644 (5/day cap)
-│
-├── database/                          # 755
-│   ├── **init**.py                    # 644
-│   ├── models.py                      # 644 (SQLAlchemy)
-│   ├── manager.py                     # 644 (CRUD)
-│   └── migrations/                    # 755
-│       ├── **init**.py                # 644
-│       ├── 001_initial.sql            # 644
-│       ├── 002_add_rationale.sql      # 644
-│       └── 003_add_cover_letter_constraint.sql  # 644
-│
-├── cli/                               # 755
-│   ├── **init**.py                    # 644
-│   └── commands.py                    # 644 (main workflow)
-│
-├── utils/                             # 755
-│   ├── **init**.py                    # 644
-│   ├── llm_client.py                  # 644 (Ollama wrapper)
-│   ├── permissions.py                 # 644 (chmod enforcement)
-│   └── git_tracker.py                 # 644 (CV versioning)
-│
-├── assets/                            # 700 (SENSITIVE)
-│   ├── master_cv.docx                 # 600 (YOUR CV)
-│   ├── master_cv.pdf                  # 600 (reference)
-│   ├── cv_versions/                   # 700 (generated CVs)
-│   ├── cover_letters/                 # 700 (generated CLs)
-│   └── decisions/                     # 700 (rationale logs)
-│
-├── main.py                            # 755 (entry point)
-├── requirements.txt                   # 644
-├── setup_permissions.sh               # 755 (bootstrap)
-└── applications.db                    # 600 (SQLite)
-
-
-
-
-
-
+## 2. FINAL DIRECTORY STRUCTURE
 
 ```
 job_application_agent/
-├── config/
-│   ├── settings.py          # API keys, paths, operational limits
-│   └── prompts.py           # Versioned LLM prompts (escaped JSON)
-├── core/
-│   ├── jd_processor.py      # URL scraping + JD parsing with fallback
-│   ├── match_scorer.py      # Experience/degree-based scoring
-│   ├── cover_letter.py      # CV-fact-based generation with validation
-│   ├── cv_surgical_editor.py # CV versioning and basic tailoring
-│   └── form_filler.py       # Browser automation prep
-├── cli/
-│   └── commands.py          # Interactive workflow with user gates
-├── utils/
-│   ├── llm_client.py        # Ollama/OpenAI/Gemini/DeepSeek support
-│   └── permissions.py       # File permission enforcement
-├── assets/
-│   ├── master_cv.docx       # YOUR CV - source of truth (600 permissions)
-│   ├── cv_versions/         # Git-tracked tailored CVs
-│   ├── cover_letters/       # Generated cover letters
-│   └── decisions/           # Immutable rationale logs
-└── applications.db          # SQLite database (600 permissions)
+│
+├── 📁 assets/                          # Protected assets (600/700 perms)
+│   ├── master_cv.docx                  # SOURCE OF TRUTH - Never edit directly
+│   ├── master_cv.pdf                   # Generated from master
+│   ├── 📁 cv_versions/                 # Git-tracked tailored CVs
+│   │   └── Company_Role_YYYYMMDD.docx
+│   ├── 📁 cover_letters/               # Generated cover letters
+│   │   └── 0001_company_full_cl.txt
+│   └── 📁 decisions/                   # Immutable decision rationales
+│       └── 0001_company_rationale.md
+│
+├── 📁 cli/                             # Command-line interface
+│   ├── __init__.py
+│   └── commands.py                     # Main CLI commands (process, status, setup)
+│
+├── 📁 config/                          # Configuration
+│   ├── __init__.py
+│   ├── settings.py                     # All paths, API keys, limits
+│   └── prompts.py                      # LLM prompts (versioned)
+│
+├── 📁 core/                            # Business logic
+│   ├── __init__.py
+│   ├── ai_form_filler.py               # NEW: Hybrid AI browser automation
+│   ├── browser_automation.py           # Legacy browser control
+│   ├── cover_letter.py                 # Cover letter generation
+│   ├── cv_surgical_editor.py           # CV tailoring (fact-preserving)
+│   ├── decision_rationale.py           # Decision logging
+│   ├── fatigue_monitor.py              # Rate limiting
+│   ├── form_filler.py                  # Rule-based form filling
+│   ├── jd_processor.py                 # Job description parsing
+│   └── match_scorer.py                 # Match evaluation
+│
+├── 📁 database/                        # Data persistence
+│   ├── __init__.py
+│   ├── manager.py                      # Database operations
+│   ├── migrations.py                   # Schema migrations
+│   └── models.py                       # SQLAlchemy models
+│
+├── 📁 utils/                           # Utilities
+│   ├── __init__.py
+│   ├── git_tracker.py                  # CV versioning
+│   ├── llm_client.py                   # Unified LLM interface
+│   └── permissions.py                  # File permission enforcement
+│
+├── 📁 tests/                           # Test suite
+│   └── (test files)
+│
+├── .env                                # Environment variables (not in git)
+├── .gitignore                          # Git exclusions
+├── applications.db                     # SQLite database (600 perms)
+├── main.py                             # Entry point
+├── README.md                           # Project documentation
+└── requirements.txt                    # Python dependencies
 ```
 
 ---
 
-## ⚙️ Configuration
+## 3. FINAL DATABASE SCHEMA
 
-Edit `config/settings.py`:
+```sql
+-- applications.db
 
-```python
-# LLM Provider (choose one)
-LLM_PROVIDER = 'ollama'  # or 'gemini', 'openai', 'deepseek'
-LLM_MODEL = 'llama3.1:8b'
+CREATE TABLE applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    
+    -- Company & Role
+    company_slug TEXT NOT NULL,
+    company_name TEXT NOT NULL,
+    role_title TEXT NOT NULL,
+    role_taxonomy TEXT,
+    
+    -- Source
+    input_type TEXT,
+    source_url TEXT,
+    raw_jd_text TEXT,
+    human_verified BOOLEAN DEFAULT 0,
+    
+    -- Requirements
+    must_haves TEXT,
+    nice_to_haves TEXT,
+    red_flags TEXT,
+    
+    -- Scoring
+    match_score INTEGER,
+    auto_reject_reason TEXT,
+    applied BOOLEAN DEFAULT 0,
+    is_exploration BOOLEAN DEFAULT 0,
+    
+    -- CV
+    cv_file_path TEXT,
+    cv_file_hash TEXT,
+    cv_variant TEXT DEFAULT 'v1',
+    
+    -- Cover Letter
+    cover_letter_path TEXT,
+    cover_letter_constraint_type TEXT,
+    cover_letter_constraint_limit INTEGER,
+    cover_letter_strategy_used TEXT,
+    cover_letter_length INTEGER,
+    
+    -- LLM Metadata
+    llm_model TEXT,
+    llm_temperature REAL,
+    prompt_version TEXT,
+    
+    -- Timing
+    date_processed DATETIME,
+    process_latency_seconds INTEGER,
+    
+    -- Outcome
+    status TEXT DEFAULT 'processed',
+    outcome TEXT DEFAULT 'pending',
+    notes TEXT
+);
 
-# Operational Limits
-DAILY_APPLICATION_CAP = 5
-MIN_HOURS_BETWEEN_APPS = 0  # Set to 0.5 for production
+CREATE TABLE decision_rationales (
+    id INTEGER PRIMARY KEY,
+    application_id INTEGER REFERENCES applications(id),
+    
+    match_score INTEGER,
+    score_reasoning TEXT,
+    applied_rationale TEXT,
+    
+    what_worked TEXT,
+    what_to_change TEXT,
+    
+    rationale_path TEXT NOT NULL
+);
 ```
 
 ---
 
-## 🛡️ Safety Features
+## 4. KEY ARCHITECTURAL DECISIONS
 
-- **Fatigue Monitor**: Daily cap + time spacing between applications
-- **Permission Enforcement**: Sensitive files (CV, DB) at 600, directories at 700
-- **Git Versioning**: Every CV change committed to `cv-history` branch
-- **Immutable Logs**: Decision rationales cannot be altered after creation
-- **Validation**: Cover letters checked against CV facts before display
-
----
-
-## 📝 Example Output
-
-```
-======================================================================
-LOADING CV (SOURCE OF TRUTH)
-======================================================================
-✓ CV loaded: 6086 characters
-
-CV FACTS EXTRACTED:
-  • Name: Bennet Allryn B
-  • Email: bennetallryn287@gmail.com
-  • Phone: +4366499459995
-  • Experience: 2 years
-  • Degrees: MBA, MSc
-  • Key achievements: 3 with metrics
-
-======================================================================
-PROCESSING JOB DESCRIPTION
-======================================================================
-
-Extracted:
-  Company: XAL
-  Role: Junior Project Manager (m/w/d)
-  Must-haves: 6 requirements
-
-[c=confirm, e=edit, s=skip]: c
-
-Score: 6/10
-Confidence: medium
-Effort: standard
-
-Proceed? [y/N]: y
-...
-```
+| Decision | Rationale |
+|----------|-----------|
+| **CV as Source of Truth** | Prevents hallucination, ensures factual accuracy |
+| **Hybrid AI Approach** | Speed (rules) + Robustness (AI fallback) |
+| **Immutable Rationales** | Audit trail, learning from past decisions |
+| **Git Versioning for CVs** | Track all changes, rollback capability |
+| **Permission Enforcement** | 600/700 perms protect sensitive data |
+| **Fatigue Monitoring** | Prevents spam, maintains quality |
+| **LLM Abstraction** | Switch providers (Gemini/Ollama/OpenAI) without code changes |
+| **Explicit User Confirmation** | Human-in-the-loop for all submissions |
 
 ---
 
-## 🔧 Troubleshooting
+## 5. WORKFLOW SUMMARY
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 1: LOAD CV                                                │
+│  • Parse master_cv.docx                                         │
+│  • Extract: name, email, phone, experience, degrees, skills     │
+│  • Output: cv_facts dict                                        │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 2: PROCESS JOB DESCRIPTION                                │
+│  • Scrape URL or parse pasted text                              │
+│  • Extract: company, role, must-haves, nice-to-haves, red flags │
+│  • Human verification step                                      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 3: SCORE MATCH                                            │
+│  • Compare CV facts vs JD requirements                          │
+│  • Score 1-10 with confidence level                             │
+│  • User decides: proceed or skip                                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 4: TAILOR CV (Surgical)                                   │
+│  • Generate bullet rewrites                                     │
+│  • Validate: no invented facts, preserve metrics                │
+│  • User approves changes                                        │
+│  • Save to cv_versions/ with git commit                         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 5: GENERATE COVER LETTER                                  │
+│  • 3 variants: full, compress, truncate                         │
+│  • Validate against CV facts                                    │
+│  • User selects & edits                                         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 6: BROWSER AUTOMATION (Hybrid AI)                         │
+│  • Try rule-based first (fast)                                  │
+│  • Fallback to AI if needed (robust)                            │
+│  • Handle: cookies, apply button, form fields, upload           │
+│  • User reviews before submit                                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 7: LOG & COMMIT                                           │
+│  • Save to applications.db                                      │
+│  • Write decision rationale to decisions/                       │
+│  • Git commit CV version                                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 6. DEPENDENCIES (requirements.txt)
+
+```
+# Core
+click>=8.0.0
+python-docx>=0.8.11
+requests>=2.28.0
+beautifulsoup4>=4.11.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# Browser Automation
+selenium>=4.0.0
+webdriver-manager>=3.8.0
+
+# AI/LLM (Choose based on provider)
+# For Gemini:
+langchain-google-genai>=1.0.0
+
+# For Ollama:
+langchain-ollama>=0.1.0
+
+# Utilities
+pyperclip>=1.8.0
+python-dotenv>=0.19.0
+```
+
+---
+
+## 7. BOOTSTRAP COMMANDS
+
+```bash
+# 1. Clone/Setup
+cd job_application_agent
+python -m venv venv
+source venv/bin/activate  # Windows: venv\\Scripts\\activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Initialize system
+python main.py setup
+
+# 4. Place your CV
+# Copy your CV to: assets/master_cv.docx
+
+# 5. Configure environment (optional)
+cp .env.example .env
+# Edit .env with your GEMINI_API_KEY or OLLAMA settings
+
+# 6. Test
+python main.py status
+python main.py process "https://example.com/job-posting"
+```
+
+---
+
+## 8. FINAL HARDENED ARCHITECTURE SUMMARY
+
+### Security
+
+- File permissions: 600 for sensitive, 700 for dirs
+- No CV facts in LLM prompts (only structure)
+- Immutable decision logs
+- Git versioning for audit trail
+
+### Reliability
+
+- Hybrid automation (rules + AI)
+- Explicit user confirmation at each step
+- Fallback to manual mode
+- Error handling with graceful degradation
+
+### Scalability
+
+- SQLite for local use (upgrade to PostgreSQL for scale)
+- Modular LLM client (switch providers easily)
+- Rate limiting (fatigue monitor)
+
+### Maintainability
+
+- Clear separation of concerns
+- Versioned prompts
+- Comprehensive logging
+- Type hints throughout
+
+---
+
+## 9. OPERATING MANUAL (Minimal Viable Documentation)
+
+### Daily Use
+
+```bash
+# Check status
+python main.py status
+
+# Process a job application
+python main.py process "https://company.com/job-url"
+
+# Or paste JD text
+python main.py process "pasted:Senior Developer..."
+```
+
+### Key Files to Protect
+
+- `assets/master_cv.docx` - Your source of truth
+- `applications.db` - Application history
+- `assets/decisions/` - Decision rationales
+
+### When to Use Which Mode
+
+- **full**: Trusted sites, standard forms
+- **assist**: Complex sites, review needed
+- **manual**: One-off applications, debugging
+
+### Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| `SyntaxError` in prompts | JSON braces must be escaped: `{{` and `}}` |
-| Ollama timeout | Increase timeout in `llm_client.py` or reduce JD text |
-| "No changes needed" for CV | Surgical editing disabled; using master CV |
-| Browser doesn't fill | Automation partial; manual fill required |
+| Cookie modal blocks | AI fallback handles automatically |
+| Field not found | Switch to assist mode |
+| LLM errors | Check API key, switch to Ollama |
+| Permission denied | Run `python main.py setup` |
 
 ---
 
-## 📊 Database Schema
+## 10. FINAL FILE MANIFEST
 
-```sql
-applications (
-    id INTEGER PRIMARY KEY,
-    company_name TEXT,
-    role_title TEXT,
-    match_score INTEGER,
-    cv_file_path TEXT,
-    cover_letter_length INTEGER,
-    llm_model TEXT,
-    date_processed TIMESTAMP,
-    process_latency_seconds INTEGER
-)
-```
+### Core Files (Your Current Implementation)
 
----
-
-## 🤝 Contributing
-
-This is a personal automation tool. Modify for your workflow:
-
-- Adjust prompts in `config/prompts.py`
-- Change scoring weights in `core/match_scorer.py`
-- Add new LLM providers in `utils/llm_client.py`
+| File | Lines | Purpose | Status |
+|------|-------|---------|--------|
+| main.py | 10 | Entry point | ✅ |
+| cli/commands.py | 500 | CLI interface | ✅ |
+| config/settings.py | 100 | Configuration | ✅ |
+| config/prompts.py | 80 | LLM prompts | ✅ |
+| core/jd_processor.py | 60 | JD parsing | ✅ |
+| core/match_scorer.py | 80 | Scoring logic | ✅ |
+| core/cv_surgical_editor.py | 350 | CV tailoring | ✅ |
+| core/cover_letter.py | 200 | Letter generation | ✅ |
+| core/form_filler.py | 250 | Rule-based automation | ⚠️ Needs cookie fix |
+| core/ai_form_filler.py | 400 | NEW: Hybrid AI automation | 🆕 Ready |
+| core/fatigue_monitor.py | 80 | Rate limiting | ✅ |
+| core/decision_rationale.py | 100 | Decision logging | ✅ |
+| utils/llm_client.py | 200 | LLM abstraction | ✅ |
+| utils/permissions.py | 60 | File permissions | ✅ |
+| utils/git_tracker.py | 40 | CV versioning | ✅ |
+| database/models.py | 80 | DB schema | ✅ |
+| database/manager.py | 100 | DB operations | ✅ |
 
 ---
 
-## 📜 License
+## 11. WHAT'S MISSING / NEXT STEPS
 
-Private use only. Do not use for spam or automated abuse of job platforms.
+### Immediate (To Fix Current Issues)
 
+1. ✅ Update `form_filler.py` with better cookie handling
+2. ✅ Add German field name mappings
+3. ✅ Add explicit waits for form fields
+4. ✅ Integrate `ai_form_filler.py` as fallback
+
+### Short Term (Enhancements)
+
+5. ⬜ Add more German website patterns
+2. ⬜ Implement screenshot-based AI verification
+3. ⬜ Add retry logic for failed fields
+4. ⬜ Create dashboard for application tracking
+
+### Long Term (Advanced)
+
+9. ⬜ Full browser-use integration
+2. ⬜ Multi-language support
+3. ⬜ LinkedIn EasyApply integration
+4. ⬜ Application outcome tracking
+
+┌─────────────────────────────────────────┐
+│  AI Browser Automation Flow             │
+├─────────────────────────────────────────┤
+│  1. AI sees the webpage (screenshot)    │
+│  2. AI reads instructions (natural lang)│
+│  3. AI decides: "Click cookie button"   │
+│  4. AI finds button by text/vision      │
+│  5. AI clicks and waits                 │
+│  6. Repeat until form complete          │
+│  7. Stops for user review               │
+└─────────────────────────────────────────┘
 ---
-
-## 🙏 Acknowledgments
-
-Built with:
-- [Click](https://click.palletsprojects.com/) for CLI
-- [python-docx](https://python-docx.readthedocs.io/) for CV processing
-- [BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/) for web scraping
-- [Ollama](https://ollama.com/) for local LLM inference

@@ -56,6 +56,7 @@ DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions'
 # OPENAI (Paid - MOST CAPABLE)
 # =============================================================================
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 
 # General LLM settings
 LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', '0.7'))
