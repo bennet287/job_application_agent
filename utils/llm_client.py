@@ -1,6 +1,6 @@
 """
-LLM Client - Unified interface for different LLM providers
-Supports: Gemini, Ollama (local), OpenAI, DeepSeek
+LLM Client for text-based tasks only.
+Uses Ollama for local processing (privacy, cost).
 """
 
 import requests
@@ -10,18 +10,20 @@ from config import settings
 
 class LLMClient:
     """
-    Unified LLM client with provider abstraction.
+    Unified LLM interface for TEXT tasks only.
     
-    Supports:
-    - Gemini (Google, free tier)
-    - Ollama (local, privacy-first)
-    - OpenAI (API key required)
-    - DeepSeek (cloud, free tier)
+    This client is used for:
+    - CV analysis
+    - Cover letter generation
+    - Job description parsing
+    - Match scoring
+    
+    NOT for browser automation (see AIBrowserAutomation for that).
     """
     
     def __init__(self):
-        self.provider = settings.LLM_PROVIDER
-        self.model = settings.LLM_MODEL
+        self.provider = settings.LLM_TEXT_PROVIDER
+        self.model = settings.LLM_TEXT_MODEL
         self.temperature = settings.LLM_TEMPERATURE
         
         # Provider-specific setup
@@ -29,16 +31,15 @@ class LLMClient:
             self.url = settings.OLLAMA_URL
         elif self.provider == 'openai':
             self.api_key = settings.OPENAI_API_KEY
-            self.url = "https://api.openai.com/v1/chat/completions "
+            self.url = "https://api.openai.com/v1/chat/completions"
         elif self.provider == 'deepseek':
             self.api_key = settings.DEEPSEEK_API_KEY
             self.url = settings.DEEPSEEK_URL
         elif self.provider == 'gemini':
             self.api_key = settings.GEMINI_API_KEY
-            # Gemini URL structure: base URL + model + action
-            self.url = f"https://generativelanguage.googleapis.com/v1beta/models/ {self.model}:generateContent"
+            self.url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
         else:
-            raise ValueError(f"Unknown provider: {self.provider}")
+            raise ValueError(f"Unknown text provider: {self.provider}")
     
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """
@@ -46,14 +47,10 @@ class LLMClient:
         
         Args:
             prompt: User prompt
-            system_prompt: Optional system instructions (provider-specific handling)
+            system_prompt: Optional system instructions
             
         Returns:
             Generated text response
-            
-        Raises:
-            ValueError: Unknown provider or missing API key
-            requests.HTTPError: API request failed
         """
         if self.provider == 'ollama':
             return self._generate_ollama(prompt, system_prompt)
@@ -82,8 +79,7 @@ class LLMClient:
             response = requests.post(
                 self.url,
                 json=payload,
-                # timeout=120  # OLD: Too short for long JD processing with local LLM
-                timeout=180  # NEW: 3 minutes for local 8B model processing long prompts
+                timeout=180
             )
             response.raise_for_status()
             return response.json()['response']
@@ -96,7 +92,7 @@ class LLMClient:
     def _generate_openai(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """OpenAI API generation."""
         if not self.api_key:
-            raise ValueError("OpenAI API key not set in config/settings.py")
+            raise ValueError("OpenAI API key not set")
         
         messages = []
         if system_prompt:
@@ -122,9 +118,7 @@ class LLMClient:
     def _generate_deepseek(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """DeepSeek API generation."""
         if not self.api_key:
-            raise ValueError(
-                "DeepSeek API key not set. Get one at https://platform.deepseek.com/ "
-            )
+            raise ValueError("DeepSeek API key not set")
         
         messages = []
         if system_prompt:
@@ -149,26 +143,14 @@ class LLMClient:
         return response.json()['choices'][0]['message']['content']
     
     def _generate_gemini(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """
-        Google Gemini API generation.
-        
-        Gemini API structure:
-        - Contents array with parts
-        - System instructions supported in Gemini 1.5+
-        - API key passed as query parameter
-        """
+        """Google Gemini API generation."""
         if not self.api_key:
-            raise ValueError(
-                "Gemini API key not set. Get one at https://aistudio.google.com/app/apikey "
-            )
+            raise ValueError("Gemini API key not set")
         
-        # Combine system prompt and user prompt for Gemini
-        # (Gemini 1.5 supports systemInstruction, but combining is more universal)
         full_prompt = prompt
         if system_prompt:
             full_prompt = f"{system_prompt}\n\n{prompt}"
         
-        # Build request payload
         payload = {
             'contents': [{
                 'parts': [{'text': full_prompt}]
@@ -181,51 +163,26 @@ class LLMClient:
             }
         }
         
-        try:
-            # API key is passed as query parameter
-            response = requests.post(
-                f"{self.url}?key={self.api_key}",
-                headers={'Content-Type': 'application/json'},
-                json=payload,
-                timeout=60
-            )
-            response.raise_for_status()
-            
-            # Parse Gemini response structure
-            result = response.json()
-            
-            # Extract text from nested structure
-            if 'candidates' in result and len(result['candidates']) > 0:
-                candidate = result['candidates'][0]
-                if 'content' in candidate and 'parts' in candidate['content']:
-                    parts = candidate['content']['parts']
-                    if len(parts) > 0 and 'text' in parts[0]:
-                        return parts[0]['text']
-            
-            # If we get here, the response structure was unexpected
-            raise ValueError(f"Unexpected Gemini response structure: {result}")
-            
-        except requests.exceptions.HTTPError as e:
-            # Enhanced error reporting for Gemini
-            error_detail = ""
-            try:
-                error_detail = e.response.json()
-            except:
-                error_detail = e.response.text
-            
-            raise requests.exceptions.HTTPError(
-                f"Gemini API error ({e.response.status_code}): {error_detail}\n"
-                f"URL: {self.url}\n"
-                f"Model: {self.model}"
-            )
+        response = requests.post(
+            f"{self.url}?key={self.api_key}",
+            headers={'Content-Type': 'application/json'},
+            json=payload,
+            timeout=60
+        )
+        response.raise_for_status()
+        
+        result = response.json()
+        if 'candidates' in result and len(result['candidates']) > 0:
+            candidate = result['candidates'][0]
+            if 'content' in candidate and 'parts' in candidate['content']:
+                parts = candidate['content']['parts']
+                if len(parts) > 0 and 'text' in parts[0]:
+                    return parts[0]['text']
+        
+        raise ValueError(f"Unexpected Gemini response structure: {result}")
     
     def test_connection(self) -> dict:
-        """
-        Test LLM provider connection.
-        
-        Returns:
-            Dict with status, provider, model, and response/error
-        """
+        """Test LLM provider connection."""
         test_prompt = "Respond with exactly: 'Connection successful'"
         
         try:
@@ -245,15 +202,13 @@ class LLMClient:
             }
 
 
-# Convenience function for getting a client instance
 def get_client() -> LLMClient:
     """Factory function to get configured LLM client."""
     return LLMClient()
 
 
-# Quick test if run directly
 if __name__ == '__main__':
-    print(f"Testing {settings.LLM_PROVIDER} with model {settings.LLM_MODEL}...")
+    print(f"Testing {settings.LLM_TEXT_PROVIDER} with model {settings.LLM_TEXT_MODEL}...")
     
     client = get_client()
     result = client.test_connection()

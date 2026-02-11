@@ -23,40 +23,44 @@ for directory in [ASSETS_DIR, CV_VERSIONS_DIR, COVER_LETTERS_DIR, DECISIONS_DIR]
     directory.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# LLM CONFIGURATION - GEMINI
+# LLM CONFIGURATION - SPLIT BY CAPABILITY
 # ============================================================================
 
-# Provider selection: 'ollama', 'openai', 'gemini', 'deepseek'
-#LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'gemini')
+# =============================================================================
+# TEXT PROCESSING LLM (Ollama recommended for privacy/cost)
+# Used for: CV analysis, cover letter generation, scoring, JD parsing
+# =============================================================================
+LLM_TEXT_PROVIDER = os.getenv('LLM_TEXT_PROVIDER', 'ollama')
+LLM_TEXT_MODEL = os.getenv('LLM_TEXT_MODEL', 'llama3.1:8b')
+OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://localhost:11434/api/generate')
 
 # =============================================================================
-# GEMINI (Google - FREE TIER AVAILABLE)
-# Get API key from: https://aistudio.google.com/app/apikey
+# BROWSER AUTOMATION LLM (MUST support tool-calling)
+# Used for: AI browser automation only
+# Options: gemini (recommended, free), openai
+# =============================================================================
+LLM_BROWSER_PROVIDER = os.getenv('LLM_BROWSER_PROVIDER', 'gemini')
+LLM_BROWSER_MODEL = os.getenv('LLM_BROWSER_MODEL', 'gemini-1.5-flash')
+
+# =============================================================================
+# API KEYS (only needed for browser provider and non-local text providers)
+# =============================================================================
+
+# GEMINI API KEY - Get from https://aistudio.google.com/app/apikey
 # Free tier: 15 requests/minute, 1500 requests/day
-# =============================================================================
-LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'ollama')
-LLM_MODEL = os.getenv('LLM_MODEL', 'llama3.1:8b')
-
-# =============================================================================
-# OLLAMA (Local - FULLY FREE, PRIVATE)
-# Install from: https://ollama.com/
-
-# Then run: ollama pull llama3.1:8b
-# =============================================================================
-OLLAMA_URL = "http://localhost:11434/api/generate"
-
-# =============================================================================
-# DEEPSEEK (Cloud - FREE TIER)
-# Get API key from: https://platform.deepseek.com/
-# =============================================================================
-DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY', '')
-DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions'
-
-# =============================================================================
-# OPENAI (Paid - MOST CAPABLE)
-# =============================================================================
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+# SECURITY: Load from environment variable, fallback to empty string
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+
+# If environment variable not set, you can temporarily uncomment and set here:
+# ⚠️  WARNING: Do not commit API keys to git! Use .env file instead.
+
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY', '')
+
+# =============================================================================
+# DEEPSEEK (Cloud - FREE TIER) - Alternative text provider
+# =============================================================================
+DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions'
 
 # General LLM settings
 LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', '0.7'))
@@ -72,7 +76,7 @@ BROWSER_PROFILE_PATH = os.getenv('BROWSER_PROFILE_PATH', '')
 DAILY_APPLICATION_CAP = int(os.getenv('DAILY_CAP', '5'))
 
 # TESTING MODE: Set to 0 for rapid testing, 0.5 for production
-MIN_HOURS_BETWEEN_APPS = float(os.getenv('MIN_HOURS', '0'))  # ← CHANGED for testing
+MIN_HOURS_BETWEEN_APPS = float(os.getenv('MIN_HOURS', '0'))
 
 EXPLORATION_RATE = float(os.getenv('EXPLORATION_RATE', '0.15'))
 
