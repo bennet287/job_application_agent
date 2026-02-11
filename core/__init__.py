@@ -1,20 +1,21 @@
+# core/__init__.py - UPDATED
 from .jd_processor import JDProcessor
 from .match_scorer import MatchScorer
 from .cv_surgical_editor import SurgicalCVEditor
 from .cover_letter import AdaptiveCoverLetterGenerator
-from .decision_rationale import DecisionRationale
-from .form_filler import ConservativeFormFiller
 from .fatigue_monitor import FatigueMonitor
-from .validators import CVValidator, CoverLetterValidator
+from .decision_rationale import DecisionRationale
+
+# v3.1: New hybrid browser automation
+from .hybrid_browser_automation import HybridBrowserAutomation, run_hybrid_automation
 
 __all__ = [
     'JDProcessor',
-    'MatchScorer',
+    'MatchScorer', 
     'SurgicalCVEditor',
     'AdaptiveCoverLetterGenerator',
-    'DecisionRationale',
-    'ConservativeFormFiller',
     'FatigueMonitor',
-    'CVValidator',
-    'CoverLetterValidator'
+    'DecisionRationale',
+    'HybridBrowserAutomation',
+    'run_hybrid_automation',
 ]
