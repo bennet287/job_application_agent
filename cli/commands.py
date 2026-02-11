@@ -16,6 +16,7 @@ from database.models import init_db
 from database.manager import DatabaseManager
 from core.fatigue_monitor import FatigueMonitor
 from core.decision_rationale import DecisionRationale
+from core.hybrid_browser_automation import run_hybrid_automation
 
 
 @click.group()
@@ -72,31 +73,57 @@ def extract_cv_facts(cv_text: str) -> dict:
         'locations': []
     }
 
-    # Name from first lines
+    # Name extraction - IMPROVED with better patterns
     lines = cv_text.split('\n')
-    first_lines = '\n'.join(lines[:10])
+    
+    # Try first 15 lines for name (increased from 10)
+    first_lines = '\n'.join(lines[:15])
+    
+    # Pattern 1: Standard capitalized name at start of line
+    # Pattern 2: All caps name
+    # Pattern 3: Name: label
+    # Pattern 4: Name in header format (larger text often at top)
     name_patterns = [
-        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*$',
-        r'^([A-Z][A-Z\s]+[A-Z])\s*$',
-        r'Name[:\s]+([^\n]+)',
+        r'^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,3})\s*$',  # Bennet Allryn B
+        r'^([A-Z][A-Z\s]+[A-Z])\s*$',  # BENNET ALLRYN B
+        r'Name[:\s]+([^\n]+)',  # Name: Bennet Allryn B
+        r'^([A-Z][a-z]+\s+[A-Z][a-z]+)\s*\n',  # First Last at very start
     ]
+    
     for pattern in name_patterns:
         match = re.search(pattern, first_lines, re.MULTILINE)
         if match:
             name = match.group(1).strip()
-            if len(name) > 3 and len(name) < 50:
-                facts['name'] = name.title()
+            # Validate: reasonable length, not just a single word, not a common word
+            if 3 < len(name) < 50 and ' ' in name and name.lower() not in ['curriculum vitae', 'resume', 'cv']:
+                facts['name'] = name.title() if name.isupper() else name
                 break
 
-    # Email
-    email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', cv_text)
-    if email_match:
-        facts['email'] = email_match.group(0)
+    # If still no name, try line 1 or 2 directly (common CV format)
+    if not facts['name']:
+        for i in range(min(3, len(lines))):
+            line = lines[i].strip()
+            # Skip empty lines and common headers
+            if line and line.lower() not in ['curriculum vitae', 'resume', 'cv', 'personal information']:
+                # Check if it looks like a name (2-3 words, capitalized)
+                words = line.split()
+                if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words if w):
+                    facts['name'] = line
+                    break
 
-    # Phone
+    # Email - IMPROVED pattern
+    email_match = re.search(
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', 
+        cv_text
+    )
+    if email_match:
+        facts['email'] = email_match.group(0).lower()
+
+    # Phone - IMPROVED patterns
     phone_patterns = [
         r'(\+\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9})',
         r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
+        r'\+\d[\d\s\-]{7,20}',  # Simple international format
     ]
     for pattern in phone_patterns:
         match = re.search(pattern, cv_text)
@@ -107,13 +134,14 @@ def extract_cv_facts(cv_text: str) -> dict:
                 facts['phone'] = phone
                 break
 
-        # Experience years - IMPROVED PATTERNS
+    # Experience years - IMPROVED PATTERNS
     exp_patterns = [
         r'(\d+)\+?\s*years?\s+(?:of\s+)?(?:relevant\s+)?(?:professional\s+)?(?:work\s+)?experience',
         r'experience[:\s]+(\d+)\+?\s*years?',
         r'(\d+)\s*years.*?experience',
         r'with\s+(\d+)\+?\s*years?',
-        r'(?:over\s+)?(\d+)\+?\s*years?',  # Matches "over 3+ years"
+        r'(?:over\s+)?(\d+)\+?\s*years?',
+        r'(\d+)\+?\s*yrs?\s+(?:of\s+)?exp',  # Short form
     ]
     for pattern in exp_patterns:
         match = re.search(pattern, cv_text, re.IGNORECASE)
@@ -125,12 +153,16 @@ def extract_cv_facts(cv_text: str) -> dict:
     degree_mappings = [
         (r'\bMBA\b', 'MBA'),
         (r'\bMSc\b', 'MSc'),
+        (r'\bM\.Sc\.', 'MSc'),
         (r'\bMCA\b', 'MCA'),
+        (r'\bM\.C\.A\.', 'MCA'),
         (r'\bMA\b', 'MA'),
         (r'\bBSc\b', 'BSc'),
+        (r'\bB\.Sc\.', 'BSc'),
         (r'\bBCA\b', 'BCA'),
         (r'\bBA\b', 'BA'),
         (r'\bPhD\b', 'PhD'),
+        (r'\bPh\.D\.', 'PhD'),
     ]
 
     found_degrees = set()
@@ -152,6 +184,7 @@ def extract_cv_facts(cv_text: str) -> dict:
     facts['summary'] = cv_text[:500]
 
     return facts
+
 
 
 def validate_against_cv(generated_text: str, cv_facts: dict) -> list:
@@ -215,9 +248,26 @@ def process(input_data, force_effort):
         click.echo("Place your CV at: assets/master_cv.docx")
         return
 
-    # Extract facts from CV
+        # Extract facts from CV
     cv_facts = extract_cv_facts(cv_text)
 
+    # DEBUG: Show what we found
+    click.echo(f"\nDEBUG CV Parsing:")
+    click.echo(f"  Raw name found: '{cv_facts.get('name')}'")
+    click.echo(f"  Email found: '{cv_facts.get('email')}'")
+    click.echo(f"  Phone found: '{cv_facts.get('phone')}'")
+
+    # CRITICAL: Prompt if name missing
+    if not cv_facts.get('name'):
+        click.echo("\n⚠️ Could not confidently detect your name from the CV.")
+        click.echo("  This is needed for form auto-fill.")
+        cv_facts['name'] = click.prompt(
+            "Please enter your full name exactly as you want it used",
+            type=str
+        )
+        click.echo(f"  ✓ Using: {cv_facts['name']}")
+
+    # Display extracted facts
     click.echo("\nCV FACTS EXTRACTED:")
     if cv_facts.get('name'):
         click.echo(f"  • Name: {cv_facts['name']}")
@@ -404,17 +454,15 @@ def process(input_data, force_effort):
         click.echo("Application cancelled by user.")
         return
 
-    # =====================================================================
-    # Step 7: Browser Automation (AI-Powered)
+        # =====================================================================
+    # Step 7: Browser Automation (AI-Powered or Assist)
     # =====================================================================
     click.echo("\n" + "="*70)
     click.echo("BROWSER AUTOMATION (AI-Powered)")
     click.echo("="*70)
 
     # Prepare user data FROM CV
-    if cv_facts is None:
-        cv_facts = {}
-
+    cv_facts = cv_facts or {}
     cv_facts.setdefault('name', '')
     cv_facts.setdefault('email', '')
     cv_facts.setdefault('phone', '')
@@ -437,71 +485,52 @@ def process(input_data, force_effort):
         click.echo("No URL provided - manual mode only")
         auto_level = 'manual'
     else:
+        # Check if AI browser is available
+        ai_available = (
+            settings.LLM_BROWSER_PROVIDER != 'ollama' and
+            bool(settings.GEMINI_API_KEY or settings.OPENAI_API_KEY)
+        )
+        
+        default_level = 'ai' if ai_available else 'assist'
+        
         auto_level = click.prompt(
             "Automation level",
             type=click.Choice(['ai', 'assist', 'manual']),
-            default='ai'
+            default=default_level
         )
 
-    if auto_level == 'ai':
-        # NEW: AI-Powered Automation
-        try:
-            from core.ai_browser_automation import run_ai_automation
+    # In the AI automation section of commands.py:
 
-            click.echo("\n  🤖 Starting AI Browser Automation...")
-            click.echo(f"  🧠 LLM: {settings.LLM_MODEL} ({settings.LLM_PROVIDER})")
-            click.echo("  📋 The AI will:")
-            click.echo("     1. Navigate to the job page")
-            click.echo("     2. Handle cookie consent")
-            click.echo("     3. Click 'Apply' button")
-            click.echo("     4. Fill all form fields")
-            click.echo("     5. Upload your CV")
-            click.echo("     6. Fill cover letter")
-            click.echo("     7. STOP for your review")
-            click.echo("")
+if auto_level == 'ai':
+    try:
+        from core.hybrid_browser_automation import run_hybrid_automation
 
-            automator, result = run_ai_automation(
-                url=url,
-                user_data=user_data,
-                cover_letter=cover_letter,
-                cv_path=cv_result['pdf']
-            )
+        click.echo("\n  🤖 Starting Hybrid Browser Automation...")
+        click.echo(f"  🧠 Planner: Context-aware | Executor: Selenium")
+        
+        # Get or create database session and application ID
+        # This assumes you have application_id from earlier in the process
+        result = run_hybrid_automation(
+            url=url,
+            user_data=user_data,
+            cover_letter=cover_letter,
+            cv_path=cv_result['pdf'],
+            session=db.session if 'db' in locals() else None,  # Pass session
+            application_id=app_id  # Pass application ID from earlier step
+        )
 
-            if result.success:
-                click.echo("\n  ✅ AI completed form filling")
-                click.echo(f"  📍 Final URL: {result.final_url}")
-
-                if result.errors:
-                    click.echo(f"  ⚠️  Warnings: {result.errors}")
-
-                click.echo("\n  🔍 Please review the form in the browser")
-                click.echo("  ✏️  Make any corrections needed")
-
-                if click.confirm("\nSubmit the application?"):
-                    click.echo("  📤 Submitting... (manual click required)")
-                    click.echo("  💡 Tip: Look for 'Absenden', 'Submit', or 'Apply' button")
-                else:
-                    click.echo("  ⏸️  Submission paused - form saved in browser")
-
-                click.pause("\nPress any key when done...")
-
-            else:
-                click.echo(f"\n  ❌ AI automation failed: {result.errors}")
-                if result.screenshot_path:
-                    click.echo(f"  📸 Screenshot saved: {result.screenshot_path}")
-
-                click.echo("\n  Falling back to assist mode...")
-                auto_level = 'assist'
-
-        except ImportError as e:
-            click.echo(f"\n  ❌ AI automation not available: {e}")
-            click.echo("  Falling back to assist mode...")
+        if result.success:
+            click.echo("\n  ✅ Automation completed")
+            click.echo(f"  🔢 Actions: {len(result.actions_taken)}")
+            if result.screenshot_path:
+                click.echo(f"  📸 Screenshot: {result.screenshot_path}")
+        else:
+            click.echo("\n  ⚠️  Automation incomplete")
             auto_level = 'assist'
 
-        except Exception as e:
-            click.echo(f"\n  ❌ Unexpected error: {e}")
-            click.echo("  Falling back to assist mode...")
-            auto_level = 'assist'
+    except Exception as e:
+        click.echo(f"\n  ❌ Error: {e}")
+        auto_level = 'assist'
 
     if auto_level == 'assist':
         import webbrowser
@@ -519,7 +548,7 @@ def process(input_data, force_effort):
     else:  # manual
         click.echo(f"\n  URL: {url}")
         click.echo("  Manual mode - copy cover letter from above")
-        click.pause("Press any key when done...")
+        click.pause("Press any key when done...")   
 
     # =====================================================================
     # STEP 8: LOG APPLICATION
