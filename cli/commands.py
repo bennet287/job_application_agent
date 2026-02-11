@@ -248,7 +248,7 @@ def process(input_data, force_effort):
         click.echo("Place your CV at: assets/master_cv.docx")
         return
 
-        # Extract facts from CV
+    # Extract facts from CV
     cv_facts = extract_cv_facts(cv_text)
 
     # DEBUG: Show what we found
@@ -454,11 +454,41 @@ def process(input_data, force_effort):
         click.echo("Application cancelled by user.")
         return
 
-        # =====================================================================
-    # Step 7: Browser Automation (AI-Powered or Assist)
+    # =====================================================================
+    # STEP 7: LOG APPLICATION (BEFORE AUTOMATION)
+    # =====================================================================
+    # Create DB record FIRST so we have app_id for automation tracking
+    click.echo("\n" + "="*70)
+    click.echo("LOGGING APPLICATION")
+    click.echo("="*70)
+
+    company_name = jd.get('company_name') or 'Unknown_Company'
+    role_title = jd.get('role_title') or 'Unknown_Role'
+
+    app_id = db.create_application({
+        'company_slug': slugify(company_name),
+        'company_name': company_name,
+        'role_title': role_title,
+        'match_score': result['score'],
+        'cv_file_path': cv_result['pdf'],
+        'cover_letter_constraint_type': 'none',
+        'cover_letter_length': len(cover_letter),
+        'llm_model': settings.LLM_MODEL,
+        'date_processed': datetime.now(),
+        'process_latency_seconds': int((datetime.now() - start_time).total_seconds())
+    })
+
+    # Save rationale
+    rationale_mgr = DecisionRationale(settings.ASSETS_DIR)
+    rationale_mgr.create(app_id, slugify(company_name), result['score'], result['analysis'], jd)
+
+    click.echo(f"✓ Application {app_id} logged successfully.")
+
+    # =====================================================================
+    # STEP 8: BROWSER AUTOMATION (AI-Powered or Assist)
     # =====================================================================
     click.echo("\n" + "="*70)
-    click.echo("BROWSER AUTOMATION (AI-Powered)")
+    click.echo("BROWSER AUTOMATION")
     click.echo("="*70)
 
     # Prepare user data FROM CV
@@ -499,42 +529,47 @@ def process(input_data, force_effort):
             default=default_level
         )
 
-    # In the AI automation section of commands.py:
+    # Execute automation based on level
+    if auto_level == 'ai':
+        try:
+            click.echo("\n  🤖 Starting Hybrid Browser Automation...")
+            click.echo(f"  🧠 Planner: Context-aware | Executor: Selenium")
+            
+            # Check if run_hybrid_automation accepts session/application_id
+            # If not, call without those parameters
+            try:
+                automation_result = run_hybrid_automation(
+                    url=url,
+                    user_data=user_data,
+                    cover_letter=cover_letter,
+                    cv_path=cv_result['pdf'],
+                    session=db.session,
+                    application_id=app_id
+                )
+            except TypeError:
+                # Function doesn't accept session/application_id yet
+                automation_result = run_hybrid_automation(
+                    url=url,
+                    user_data=user_data,
+                    cover_letter=cover_letter,
+                    cv_path=cv_result['pdf']
+                )
 
-if auto_level == 'ai':
-    try:
-        from core.hybrid_browser_automation import run_hybrid_automation
+            if automation_result.success:
+                click.echo("\n  ✅ Automation completed")
+                click.echo(f"  🔢 Actions: {len(automation_result.actions_taken)}")
+                if automation_result.screenshot_path:
+                    click.echo(f"  📸 Screenshot: {automation_result.screenshot_path}")
+            else:
+                click.echo("\n  ⚠️  Automation incomplete")
+                auto_level = 'assist'
 
-        click.echo("\n  🤖 Starting Hybrid Browser Automation...")
-        click.echo(f"  🧠 Planner: Context-aware | Executor: Selenium")
-        
-        # Get or create database session and application ID
-        # This assumes you have application_id from earlier in the process
-        result = run_hybrid_automation(
-            url=url,
-            user_data=user_data,
-            cover_letter=cover_letter,
-            cv_path=cv_result['pdf'],
-            session=db.session if 'db' in locals() else None,  # Pass session
-            application_id=app_id  # Pass application ID from earlier step
-        )
-
-        if result.success:
-            click.echo("\n  ✅ Automation completed")
-            click.echo(f"  🔢 Actions: {len(result.actions_taken)}")
-            if result.screenshot_path:
-                click.echo(f"  📸 Screenshot: {result.screenshot_path}")
-        else:
-            click.echo("\n  ⚠️  Automation incomplete")
+        except Exception as e:
+            click.echo(f"\n  ❌ Error: {e}")
             auto_level = 'assist'
-
-    except Exception as e:
-        click.echo(f"\n  ❌ Error: {e}")
-        auto_level = 'assist'
 
     if auto_level == 'assist':
         import webbrowser
-        import pyperclip
 
         webbrowser.open(url)
         pyperclip.copy(cover_letter)
@@ -545,35 +580,12 @@ if auto_level == 'ai':
         click.echo("\n  Please fill the form manually")
         click.pause("Press any key when done...")
 
-    else:  # manual
+    elif auto_level == 'manual':
         click.echo(f"\n  URL: {url}")
         click.echo("  Manual mode - copy cover letter from above")
-        click.pause("Press any key when done...")   
+        click.pause("Press any key when done...")
 
-    # =====================================================================
-    # STEP 8: LOG APPLICATION
-    # =====================================================================
-    company_name = jd.get('company_name') or 'Unknown_Company'
-    role_title = jd.get('role_title') or 'Unknown_Role'
-
-    app_id = db.create_application({
-        'company_slug': slugify(company_name),
-        'company_name': company_name,
-        'role_title': role_title,
-        'match_score': result['score'],
-        'cv_file_path': cv_result['pdf'],
-        'cover_letter_constraint_type': 'none',
-        'cover_letter_length': len(cover_letter),
-        'llm_model': settings.LLM_MODEL,
-        'date_processed': datetime.now(),
-        'process_latency_seconds': int((datetime.now() - start_time).total_seconds())
-    })
-
-    # Save rationale
-    rationale_mgr = DecisionRationale(settings.ASSETS_DIR)
-    rationale_mgr.create(app_id, slugify(company_name), result['score'], result['analysis'], jd)
-
-    click.echo(f"\n✓ Application {app_id} logged successfully.")
+    click.echo(f"\n✓ Process complete for application {app_id}.")
 
 
 def slugify(text: str) -> str:
