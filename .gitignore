@@ -1,27 +1,31 @@
-﻿# Python
+﻿# Environment variables
+.env
+
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
+
+# Virtual environments
 venv/
 env/
-*.egg-info/
-
-# Sensitive
-assets/master_cv.docx
-assets/master_cv.pdf
-applications.db
-config/settings.py  # Contains API keys
-
-# Generated
-assets/cv_versions/*.docx
-assets/cv_versions/*.pdf
-assets/cover_letters/*.txt
-assets/decisions/*.txt
+ENV/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Application specific
+applications.db
+*.png
+*.log
+
+# Temporary files
+*.tmp
