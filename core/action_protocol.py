@@ -1,210 +1,219 @@
 """
-Strict Action Protocol v3.1 - Semantic Validation
+Action Protocol v3.1 - Strict Protocol + Semantic Validation
 """
 
+from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
-import re
 
 
 @dataclass
 class Action:
+    """Represents a parsed action."""
     type: str
     params: List[str]
     raw: str
     
-    # v3.1: Add reason codes for STOP
-    STOP_REASONS = {
-        'SUCCESS': 'Task completed successfully',
-        'BUDGET_EXCEEDED': 'Step budget reached',
-        'NO_MATCHING_FIELDS': 'Required fields not found',
-        'REQUIRES_HUMAN': 'Human intervention needed',
-        'CONFUSION': 'Planner uncertain',
-        'ERROR': 'Execution error'
-    }
-    
-    @classmethod
-    def parse(cls, line: str) -> Optional["Action"]:
-        line = line.strip()
-        if not line or line.startswith('#'):
+    @staticmethod
+    def parse(raw: str) -> Optional['Action']:
+        """Parse action from raw string. FIXED: Proper splitting."""
+        if not raw or not isinstance(raw, str):
             return None
         
-        parts = line.split('|')
-        if len(parts) < 1:
+        raw = raw.strip()
+        if not raw:
             return None
         
-        action_type = parts[0].upper()
-        params = [p.strip() for p in parts[1:]]
+        # Split on | character
+        parts = raw.split('|')
+        if not parts:
+            return None
         
-        valid_types = {'NAVIGATE', 'CLICK', 'FILL', 'UPLOAD', 'SELECT', 
-                      'WAIT', 'SCREENSHOT', 'STOP', 'REPORT'}
+        action_type = parts[0].strip().upper()
+        params = [p.strip() for p in parts[1:] if p.strip()]
         
+        # Validate action type
+        valid_types = ['NAVIGATE', 'CLICK', 'FILL', 'UPLOAD', 'WAIT', 'STOP', 'REPORT', 'DATE']
         if action_type not in valid_types:
-            return None
+            print(f"⚠️  Unknown action type: {action_type}, defaulting to REPORT")
+            action_type = 'REPORT'
+            params = [raw]  # Use full string as report message
         
-        # v3.1: Normalize STOP reason codes
-        if action_type == 'STOP' and params:
-            reason = params[0].upper()
-            if reason in cls.STOP_REASONS:
-                params[0] = reason
-        
-        return cls(type=action_type, params=params, raw=line)
+        return Action(action_type, params, raw)
     
-    def to_executor_call(self) -> tuple:
-        method_map = {
-            'NAVIGATE': ('navigate', {'url': self.params[0] if self.params else ''}),
-            'CLICK': ('click_button', {'text': self.params[0] if self.params else ''}),
-            'FILL': ('fill_input', {
-                'label': self.params[0] if len(self.params) > 0 else '',
-                'value': self.params[1] if len(self.params) > 1 else ''
-            }),
-            'UPLOAD': ('upload_file', {
-                'label': self.params[0] if len(self.params) > 0 else '',
-                'path': self.params[1] if len(self.params) > 1 else ''
-            }),
-            'SELECT': ('select_option', {
-                'label': self.params[0] if len(self.params) > 0 else '',
-                'option': self.params[1] if len(self.params) > 1 else ''
-            }),
-            'WAIT': ('wait', {'seconds': int(self.params[0]) if self.params else 2}),
-            'SCREENSHOT': ('screenshot', {'path': self.params[0] if self.params else 'screenshot.png'}),
-            'STOP': ('stop', {'reason': self.params[0] if self.params else 'COMPLETE'}),
-            'REPORT': ('report', {'message': self.params[0] if self.params else ''}),
-        }
-        return method_map.get(self.type, (None, {}))
-    
-    # v3.1: Get STOP reason description
-    def get_stop_reason(self) -> str:
-        if self.type == 'STOP' and self.params:
-            return self.STOP_REASONS.get(self.params[0], self.params[0])
-        return 'Unknown'
-
-
-class ActionSchema:
-    """v3.1: Semantic validation schema for actions."""
-    
-    SCHEMAS = {
-        'FILL': {
-            'min_params': 2,
-            'validate_label_exists': True,
-            'validate_value_non_empty': True,
-            'confidence_threshold': 0.7
-        },
-        'UPLOAD': {
-            'min_params': 2,
-            'validate_path_exists': True,
-            'validate_is_file': True
-        },
-        'CLICK': {
-            'min_params': 1,
-            'validate_label_exists': True,
-            'confidence_threshold': 0.6
-        },
-        'SELECT': {
-            'min_params': 2,
-            'validate_label_exists': True
-        }
-    }
-    
-    @classmethod
-    def validate(cls, action: Action, context: Any = None) -> tuple:
-        """
-        Validate action against schema and context.
-        Returns: (is_valid, error_message, confidence)
-        """
-        schema = cls.SCHEMAS.get(action.type, {})
+    def to_executor_call(self) -> Tuple[str, Dict]:
+        """Convert to executor method call. FIXED: Proper param handling."""
+        if self.type == 'NAVIGATE':
+            return ('navigate', {'url': self.params[0] if self.params else ''})
         
-        # Check param count
-        if len(action.params) < schema.get('min_params', 0):
-            return False, f"{action.type} requires {schema['min_params']} params", 0.0
+        elif self.type == 'CLICK':
+            return ('click_button', {'text': self.params[0] if self.params else ''})
         
-        # v3.1: Context-aware validation
-        if context and hasattr(context, 'buttons'):
-            return cls._validate_against_context(action, context, schema)
-        
-        return True, "", 1.0
-    
-    @classmethod
-    def _validate_against_context(cls, action: Action, context: Any, schema: Dict) -> tuple:
-        """Validate action against PageContext."""
-        threshold = schema.get('confidence_threshold', 0.0)
-        
-        if action.type in ['CLICK', 'FILL', 'SELECT', 'UPLOAD']:
-            label = action.params[0]
-            
-            # v3.1: Fuzzy match against available elements
-            if action.type == 'CLICK':
-                confidence = cls._fuzzy_match(label, context.buttons)
+        elif self.type == 'FILL':
+            if len(self.params) >= 2:
+                return ('fill_input', {'label': self.params[0], 'value': self.params[1]})
+            elif len(self.params) == 1:
+                return ('fill_input', {'label': self.params[0], 'value': ''})
             else:
-                input_labels = [inp.get('label', '') for inp in context.inputs]
-                file_labels = context.file_inputs
-                confidence = cls._fuzzy_match(label, input_labels + file_labels)
-            
-            if confidence < threshold:
-                return False, f"Label '{label}' confidence {confidence:.2f} below threshold {threshold}", confidence
-            
-            return True, "", confidence
+                return (None, {})
         
-        return True, "", 1.0
+        elif self.type == 'UPLOAD':
+            if len(self.params) >= 2:
+                return ('upload_file', {'label': self.params[0], 'path': self.params[1]})
+            elif len(self.params) == 1:
+                return ('upload_file', {'label': self.params[0], 'path': ''})
+            else:
+                return (None, {})
+        
+        elif self.type == 'WAIT':
+            # FIXED: Handle int conversion safely
+            seconds = 2  # default
+            if self.params:
+                try:
+                    seconds = int(self.params[0])
+                except (ValueError, TypeError):
+                    print(f"⚠️  WAIT param '{self.params[0]}' is not a number, using default 2s")
+                    seconds = 2
+            return ('do_wait', {'seconds': seconds})
+        
+        elif self.type == 'DATE':
+            if len(self.params) >= 2:
+                return ('handle_date_field', {'label': self.params[0], 'days_from_now': int(self.params[1])})
+            elif len(self.params) == 1:
+                return ('handle_date_field', {'label': self.params[0], 'days_from_now': 1})
+            else:
+                return (None, {})
+        
+        elif self.type == 'STOP':
+            return ('stop', {'reason': self.params[0] if self.params else 'UNKNOWN'})
+        
+        elif self.type == 'REPORT':
+            return ('report', {'message': self.params[0] if self.params else ''})
+        
+        else:
+            return (None, {})
     
-    @staticmethod
-    def _fuzzy_match(query: str, candidates: List[str]) -> float:
-        """
-        v3.1: Normalized fuzzy matching.
-        Returns confidence score 0.0-1.0
-        """
-        if not query or not candidates:
-            return 0.0
-        
-        query_norm = ActionSchema._normalize(query)
-        
-        best_score = 0.0
-        for candidate in candidates:
-            cand_norm = ActionSchema._normalize(candidate)
-            
-            # Exact match
-            if query_norm == cand_norm:
-                return 1.0
-            
-            # Substring match
-            if query_norm in cand_norm or cand_norm in query_norm:
-                score = len(query_norm) / max(len(query_norm), len(cand_norm))
-                best_score = max(best_score, score)
-            
-            # Word overlap
-            query_words = set(query_norm.split())
-            cand_words = set(cand_norm.split())
-            if query_words and cand_words:
-                overlap = len(query_words & cand_words) / len(query_words | cand_words)
-                best_score = max(best_score, overlap)
-        
-        return best_score
-    
-    @staticmethod
-    def _normalize(text: str) -> str:
-        """Normalize text for matching."""
-        import unicodedata
-        text = text.lower().strip()
-        text = unicodedata.normalize('NFKD', text)
-        text = re.sub(r'[^\w\s]', '', text)  # Remove punctuation
-        text = re.sub(r'\s+', ' ', text)     # Normalize whitespace
-        text = re.sub(r'\s*\*\s*', '', text) # Remove required markers
-        text = re.sub(r'\s*\(required\)\s*', '', text)
-        return text
+    def get_stop_reason(self) -> str:
+        """Get stop reason for STOP actions."""
+        if self.type == 'STOP' and self.params:
+            return self.params[0]
+        return 'UNKNOWN'
 
 
 class ActionProtocol:
+    """Protocol for action validation and parsing."""
+    
     @staticmethod
-    def parse_response(text: str) -> List[Action]:
+    def parse_response(response: str) -> List[Action]:
+        """Parse LLM response into actions."""
         actions = []
-        for line in text.split('\n'):
-            cleaned = re.sub(r'^\s*\d+[\.\)]\s*', '', line.strip())
-            action = Action.parse(cleaned)
+        for line in response.strip().split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            # Remove any markdown formatting
+            line = line.replace('```', '').strip()
+            action = Action.parse(line)
             if action:
                 actions.append(action)
         return actions
     
     @staticmethod
-    def validate_action(action: Action, context: Any = None) -> tuple:
-        """v3.1: Use semantic schema validation."""
-        return ActionSchema.validate(action, context)
+    def validate_action(action: Action, context) -> Tuple[bool, str, float]:
+        """Validate action against page context."""
+        from core.browser_executor import PageContext
+        
+        if not isinstance(context, PageContext):
+            return True, "No context available", 1.0
+        
+        if action.type == 'NAVIGATE':
+            return True, "Navigate always valid", 1.0
+        
+        elif action.type == 'WAIT':
+            return True, "Wait always valid", 1.0
+        
+        elif action.type == 'STOP':
+            return True, "Stop always valid", 1.0
+        
+        elif action.type == 'REPORT':
+            return True, "Report always valid", 1.0
+        
+        elif action.type == 'CLICK':
+            if not action.params:
+                return False, "No button specified", 0.0
+            
+            target = action.params[0]
+            # Fuzzy match against available buttons
+            best_score = ActionSchema._fuzzy_match(target, context.buttons)
+            
+            if best_score >= 0.6:
+                return True, f"Button found (confidence: {best_score:.2f})", best_score
+            else:
+                return False, f"Button '{target}' not found (best match: {best_score:.2f})", best_score
+        
+        elif action.type == 'FILL':
+            if len(action.params) < 1:
+                return False, "No field specified", 0.0
+            
+            target = action.params[0]
+            input_labels = [inp.get('label', '') for inp in context.inputs]
+            best_score = ActionSchema._fuzzy_match(target, input_labels)
+            
+            if best_score >= 0.7:
+                return True, f"Field found (confidence: {best_score:.2f})", best_score
+            else:
+                return False, f"Field '{target}' not found (best match: {best_score:.2f})", best_score
+        
+        elif action.type == 'UPLOAD':
+            if len(action.params) < 1:
+                return False, "No upload field specified", 0.0
+            
+            # Check if file inputs exist
+            if context.file_inputs:
+                return True, f"File input available", 1.0
+            else:
+                return False, "No file input found", 0.0
+        
+        return True, "Unknown action type, allowing", 0.5
+
+
+class ActionSchema:
+    """Schema definitions for actions."""
+    
+    @staticmethod
+    def _fuzzy_match(target: str, candidates: List[str]) -> float:
+        """Simple fuzzy matching. Returns score 0.0-1.0."""
+        if not target or not candidates:
+            return 0.0
+        
+        target_lower = target.lower()
+        best_score = 0.0
+        
+        for candidate in candidates:
+            if not candidate:
+                continue
+            
+            candidate_lower = candidate.lower()
+            
+            # Exact match
+            if target_lower == candidate_lower:
+                return 1.0
+            
+            # Contains match
+            if target_lower in candidate_lower or candidate_lower in target_lower:
+                score = 0.8
+                if score > best_score:
+                    best_score = score
+                continue
+            
+            # Word overlap
+            target_words = set(target_lower.split())
+            candidate_words = set(candidate_lower.split())
+            if target_words and candidate_words:
+                overlap = len(target_words & candidate_words)
+                total = len(target_words | candidate_words)
+                if total > 0:
+                    score = overlap / total
+                    if score > best_score:
+                        best_score = score
+        
+        return best_score
