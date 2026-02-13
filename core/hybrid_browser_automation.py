@@ -132,6 +132,14 @@ class HybridBrowserAutomation:
                 clicked_apply = True
             
             print(f"\n  ▶️  {action.raw}")
+
+            # ===== NEW: Step budget check =====
+            self.planner.current_step += 1
+            if self.planner.current_step > self.planner.step_budget:
+                print(f"     🛑 Step budget ({self.planner.step_budget}) exceeded")
+                result.stop_reason = "BUDGET_EXCEEDED"
+                break
+            # =================================
             
             # FIXED: Conditional validation based on action type
             # Only validate actions that must exist on CURRENT page state
@@ -236,6 +244,14 @@ class HybridBrowserAutomation:
             print(f"  📋 Form state: {len(context.inputs)} input fields detected")
             
             if len(context.inputs) > 0:
+                # ===== DYNAMIC BUDGET ADJUSTMENT =====
+                if len(context.inputs) > 10:
+                    self.planner.step_budget = max(20, self.planner.step_budget)
+                    print(f"     📊 Large form detected – step budget increased to {self.planner.step_budget}")
+                elif len(context.inputs) > 5:
+                    self.planner.step_budget = max(15, self.planner.step_budget)
+                # =====================================
+
                 # Import FieldMatcher for dynamic field matching
                 from core.field_matcher import FieldMatcher
                 
@@ -269,6 +285,14 @@ class HybridBrowserAutomation:
                     # Execute each fill action
                     for fill_action in fill_actions:
                         print(f"\n  ▶️  {fill_action.raw}")
+
+                        # ===== NEW: Step budget check =====
+                        self.planner.current_step += 1
+                        if self.planner.current_step > self.planner.step_budget:
+                            print(f"     🛑 Step budget ({self.planner.step_budget}) exceeded")
+                            result.stop_reason = "BUDGET_EXCEEDED"
+                            break
+                        # =================================
                         
                         fill_success, fill_msg = self._execute_with_recovery(
                             fill_action, context, user_data, cv_path, history
@@ -287,6 +311,80 @@ class HybridBrowserAutomation:
         
         result.final_url = self.executor.driver.current_url
         result.success = len(result.actions_taken) >= 2
+        
+        # ========== FINAL VERIFICATION ==========
+        if clicked_apply and len(result.actions_taken) > 0:
+            print("\n  🔍 Final verification: checking critical fields...")
+            
+            # Re-extract context to get current state
+            from selenium.webdriver.common.by import By
+            final_context = self.executor.extract_page_context()
+            
+            # Find country dropdown in final_context
+            country_field = None
+            for inp in final_context.inputs:
+                if inp.get('label') == 'Country' and inp.get('type') == 'select':
+                    country_field = inp
+                    break
+            
+            if country_field:
+                try:
+                    # Find the actual select element (use the same robust strategy as select_dropdown)
+                    select_elem = None
+                    # Strategy: find by label text
+                    label_elem = self.executor.driver.find_element(
+                        By.XPATH,
+                        "//label[contains(normalize-space(text()), 'Country')]"
+                    )
+                    if label_elem:
+                        # Try parent container
+                        parent = label_elem.find_element(By.XPATH, "..")
+                        try:
+                            select_elem = parent.find_element(By.TAG_NAME, "select")
+                        except:
+                            # Try following sibling
+                            select_elem = label_elem.find_element(By.XPATH, "./following-sibling::select[1]")
+                    
+                    if select_elem:
+                        # Get currently selected option text
+                        selected = self.executor.driver.execute_script(
+                            "return arguments[0].options[arguments[0].selectedIndex].text;",
+                            select_elem
+                        )
+                        expected_country = user_data.get('country', 'Austria')
+                        
+                        if selected != expected_country:
+                            print(f"  ⚠️  Country dropdown reset to '{selected}' – re-selecting...")
+                            # Re-run the select action
+                            self.executor.select_dropdown('Country', expected_country)
+                            time.sleep(1)
+                            print(f"  ✅ Country re-verified")
+                        else:
+                            print(f"  ✅ Country dropdown correctly set to '{selected}'")
+                    else:
+                        print("  ⚠️  Could not locate country dropdown for verification")
+                except Exception as e:
+                    print(f"  ⚠️  Country verification failed: {e}")
+            else:
+                print("  ℹ️  No country dropdown found")
+        # ========================================
+        
+        # ========== AUTO-SUBMIT (OPTIONAL) ==========
+        if clicked_apply and len(result.actions_taken) > 0:
+            try:
+                print("\n  📤 Looking for submit button...")
+                # Try common submit button texts
+                submit_texts = ['Submit', 'Send', 'Submit application', 'Apply', 'Bewerben', 'Absenden', 'Senden']
+                for text in submit_texts:
+                    if self.executor.click_button(text, threshold=0.7):
+                        print(f"  ✅ Submit button clicked: '{text}'")
+                        time.sleep(2)
+                        break
+                else:
+                    print("  ⚠️  No submit button found – manual submission may be required")
+            except Exception as e:
+                print(f"  ⚠️  Submit failed: {e}")
+        # ===========================================
         
         # Take final screenshot with meaningful name
         company_slug = self._extract_company_slug(self.executor.driver.current_url)

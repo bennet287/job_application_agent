@@ -32,7 +32,7 @@ class Action:
         params = [p.strip() for p in parts[1:] if p.strip()]
         
         # Validate action type
-        valid_types = ['NAVIGATE', 'CLICK', 'FILL', 'UPLOAD', 'WAIT', 'STOP', 'REPORT', 'DATE']
+        valid_types = ['NAVIGATE', 'CLICK', 'FILL', 'UPLOAD', 'WAIT', 'STOP', 'REPORT', 'DATE', 'CHECKBOX', 'SELECT']
         if action_type not in valid_types:
             print(f"⚠️  Unknown action type: {action_type}, defaulting to REPORT")
             action_type = 'REPORT'
@@ -80,6 +80,18 @@ class Action:
                 return ('handle_date_field', {'label': self.params[0], 'days_from_now': int(self.params[1])})
             elif len(self.params) == 1:
                 return ('handle_date_field', {'label': self.params[0], 'days_from_now': 1})
+            else:
+                return (None, {})
+        
+        elif self.type == 'CHECKBOX':
+            if len(self.params) >= 1:
+                return ('click_checkbox', {'label': self.params[0], 'threshold': 0.6})
+            else:
+                return (None, {})
+        
+        elif self.type == 'SELECT':
+            if len(self.params) >= 2:
+                return ('select_dropdown', {'label': self.params[0], 'value': self.params[1], 'threshold': 0.7})
             else:
                 return (None, {})
         

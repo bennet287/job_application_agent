@@ -142,27 +142,26 @@ def extract_cv_facts(cv_text: str) -> dict:
         print("    ⚠️  Could not auto-detect name – will prompt later.")
     # -------------------------------------------------
 
-    # ----- STRUCTURED ADDRESS EXTRACTION -----
+    # ----- STRUCTURED ADDRESS EXTRACTION (IMPROVED) -----
     for line in lines[:20]:
         line = line.strip()
-        # Look for a line containing a postcode (4-5 digits) and a city
-        if re.search(r'\b\d{4,5}\b', line) and re.search(r'\b[A-Z][a-z]+\b', line):
-            # Found address line: e.g. "9020 Klagenfurt am Wörthersee, Austria."
+        # Look for a line containing a postcode (4-5 digits) and at least one capitalized word
+        if re.search(r'\b\d{4,5}\b', line) and re.search(r'\b[A-Z][a-zA-Z]', line):
             facts['address_raw'] = line
             print(f"    ✅ Address extracted: '{line}'")
-            
+
             # Parse components
             parts = line.split(',')
             if len(parts) >= 2:
                 facts['country'] = parts[-1].strip().rstrip('.')
                 address_part = parts[0].strip()
-                
-                # Extract postcode and city
+
+                # Extract postcode and city (multi-word allowed)
                 pc_match = re.match(r'^(\d{4,5})\s+(.*)', address_part)
                 if pc_match:
                     facts['postcode'] = pc_match.group(1)
                     facts['city'] = pc_match.group(2)
-                    facts['address_line1'] = address_part  # "9020 Klagenfurt am Wörthersee"
+                    facts['address_line1'] = address_part
                     print(f"       └─ Postcode: {facts['postcode']}, City: {facts['city']}, Country: {facts['country']}")
             break
     # ------------------------------------------

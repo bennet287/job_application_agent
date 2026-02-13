@@ -45,6 +45,17 @@ class FieldMatcher:
             'earliest start date', 'start date', 'startdatum', 'available from',
             'earliest start', 'availability', 'available date'
         ],
+        'consent': [
+            'i agree', 'agree', 'consent', 'accept terms', 'data processing',
+            'i consent', 'agree to', 'zustimmung', 'einwilligung', 'i agree*',
+            'consider me for other positions', 'allow my information to be searchable',
+            'keep my data for future opportunities', 'opt in', 'subscribe',
+            'searchable', 'consider me', 'future opportunities'
+        ],
+        'salary_expectation': [
+            'annual gross salary', 'salary expectation', 'gehaltsvorstellung',
+            'expected salary', 'salary', 'gehalt', 'annual salary'
+        ],
         'linkedin': ['linkedin', 'linkedin profile', 'linkedin url'],
         'github': ['github', 'github profile', 'github url'],
         'website': ['website', 'homepage', 'portfolio', 'personal website'],
@@ -62,6 +73,15 @@ class FieldMatcher:
         
         # Remove common punctuation and special chars for better matching
         label_clean = re.sub(r'[*:•\-_]', ' ', label_lower).strip()
+        
+        # Special handling for Address Line 2 - only fill if we have explicit data
+        if any(pattern in label_clean for pattern in ['address line 2', 'address2', 'line 2', 'address line two']):
+            value = cv_facts.get('address_line2')
+            if value:  # Only return if we have actual data
+                return ('address_line2', str(value))
+            else:
+                # Return None to skip this optional field
+                return None
         
         for fact_key, patterns in cls.FIELD_PATTERNS.items():
             # Check if any pattern is a substring or fuzzy match

@@ -3,6 +3,9 @@ Database models for Job Application Agent v3.1
 Includes browser automation metrics and observability
 """
 
+import os
+from pathlib import Path
+
 from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Boolean, Text, Float, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -150,6 +153,9 @@ def init_db(db_path: str):
     """Initialize database with all tables."""
     engine = create_engine(f'sqlite:///{db_path}')
     Base.metadata.create_all(engine)
+    db_file = Path(db_path)
+    if db_file.exists():
+        os.chmod(db_file, 0o600)
     return sessionmaker(bind=engine)
 
 

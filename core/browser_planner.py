@@ -32,46 +32,90 @@ class ContextAwarePlanner:
         return [Action.parse(a) for a in base if Action.parse(a)]
 
     def generate_fill_plan(self, context: PageContext, cv_facts: Dict) -> List[Action]:
-        """Dynamically create FILL/UPLOAD actions for every matching field."""
+        """Generate actions for form fields."""
         actions = []
         
-        # Prepare CV facts with all possible field expansions
         prepared_facts = FieldMatcher.prepare_cv_facts(cv_facts)
-        
-        print(f"    🧠 Matching {len(context.inputs)} form fields to CV facts...")
+        print(f"    🧠 Matching {len(context.inputs)} form fields...")
         
         for inp in context.inputs:
-            label = inp.get('label', '')
-            if not label:
+            # Use the EXACT label text from the form detection
+            exact_label = inp.get('label', '')
+            label_lower = exact_label.lower()
+            input_type = inp.get('type', 'text')
+            detected_input_type = inp.get('input_type', input_type)
+            is_required = inp.get('required', False)
+            
+            if not exact_label:
                 continue
             
-            # Special case: date fields
-            if any(term in label.lower() for term in ['start date', 'earliest start', 'availability', 'available from']):
-                # Use a special DATE action
-                action = Action.parse(f"DATE|{label}|1")  # 1 = tomorrow
+            # Debug print
+            print(f"       Processing: '{exact_label}' (type: {input_type})")
+            
+            # Checkbox handling - use FieldMatcher for broader consent pattern matching
+            if input_type == 'checkbox':
+                # Check if this checkbox matches any consent pattern
+                is_consent = False
+                for pattern in FieldMatcher.FIELD_PATTERNS.get('consent', []):
+                    if pattern in label_lower:
+                        is_consent = True
+                        break
+                
+                if is_consent:
+                    action = Action.parse(f"CHECKBOX|{exact_label}")
+                    if action:
+                        actions.append(action)
+                        print(f"       ✓ {exact_label} → [CHECKBOX]")
+                else:
+                    print(f"       ⚠ {exact_label} → optional checkbox, skip")
+                continue
+            
+            # Date handling
+            if any(term in label_lower for term in ['start date', 'earliest start', 'availability']):
+                action = Action.parse(f"DATE|{exact_label}|1")
                 if action:
                     actions.append(action)
-                    print(f"       ✓ {label} → [DATE: tomorrow]")
+                    print(f"       ✓ {exact_label} → [DATE]")
                 continue
             
-            match = FieldMatcher.match_field(label, prepared_facts)
+            # SELECT: Explicitly detected select elements OR common dropdown labels
+            is_select = (
+                detected_input_type == 'select' or 
+                any(term in label_lower for term in ['country', 'nationality', 'gender', 'salutation', 'state', 'region'])
+            )
+            
+            # Field matching
+            match = FieldMatcher.match_field(exact_label, prepared_facts)
             if match:
                 fact_key, value = match
-                if inp.get('type') == 'file' or 'upload' in label.lower():
-                    action = Action.parse(f"UPLOAD|{label}|{value}")
-                else:
-                    action = Action.parse(f"FILL|{label}|{value}")
                 
+                if not value and not is_required:
+                    print(f"       ⚠ {exact_label} → no data, skip")
+                    continue
+                
+                # Determine action type
+                if input_type == 'file' or 'upload' in label_lower:
+                    action_str = f"UPLOAD|{exact_label}|{value}"
+                elif is_select:
+                    action_str = f"SELECT|{exact_label}|{value}"
+                else:
+                    action_str = f"FILL|{exact_label}|{value}"
+                
+                action = Action.parse(action_str)
                 if action:
                     actions.append(action)
-                    print(f"       ✓ {label} → {fact_key}")
+                    print(f"       ✓ {exact_label} → {fact_key}")
             else:
-                print(f"       ⚠ {label} → no match")
+                print(f"       ⚠ {exact_label} → no match")
         
-        if not actions:
-            print("    ⚠️  No fields matched - form may use non-standard labels")
-        
+        print(f"    ✅ Generated {len(actions)} actions")
         return actions
+
+    def _is_select_field(self, label: str, input_type: str) -> bool:
+        """Check if a field is likely a select/dropdown."""
+        # Common dropdown labels
+        dropdown_labels = ['country', 'nationality', 'gender', 'salutation', 'title', 'state', 'region', 'province']
+        return any(term in label.lower() for term in dropdown_labels) or input_type == 'select'
 
     def reset_budget(self):
         self.current_step = 0

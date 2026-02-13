@@ -9,6 +9,8 @@ from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass, field
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
@@ -17,6 +19,7 @@ from selenium.common.exceptions import (
 )
 from sqlalchemy import text
 from urllib.parse import urlparse
+from datetime import datetime, timedelta
 
 from core.action_protocol import Action
 
@@ -206,6 +209,102 @@ class BrowserExecutor:
 
         return best_match, best_score
 
+    def click_checkbox(self, label: str, threshold: float = 0.6) -> bool:
+        """Click a checkbox - ultra robust version with fuzzy matching."""
+        print(f"    🔲 CHECKBOX: '{label}'")
+        
+        clean_label = label.replace('*', '').strip().lower()
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                # Refresh context
+                self._wait_for_dom_stable(timeout=2)
+                
+                # Get all checkboxes on the page
+                checkboxes = self.driver.find_elements(By.XPATH, "//input[@type='checkbox']")
+                print(f"      Found {len(checkboxes)} checkboxes")
+                
+                for i, checkbox in enumerate(checkboxes):
+                    try:
+                        # Find associated label
+                        checkbox_id = checkbox.get_attribute('id')
+                        checkbox_name = checkbox.get_attribute('name')
+                        
+                        label_elem = None
+                        label_text = ""
+                        
+                        # Try to find label by 'for' attribute
+                        if checkbox_id:
+                            try:
+                                label_elem = self.driver.find_element(By.XPATH, f"//label[@for='{checkbox_id}']")
+                                label_text = (label_elem.text or '').strip()
+                            except:
+                                pass
+                        
+                        # If no label found, try parent element
+                        if not label_elem:
+                            try:
+                                parent = checkbox.find_element(By.XPATH, "..")
+                                label_text = (parent.text or '').strip()
+                            except:
+                                pass
+                        
+                        # Check if this is the checkbox we want
+                        label_lower = label_text.lower()
+                        
+                        # Match criteria
+                        is_match = (
+                            clean_label in label_lower or
+                            label_lower in clean_label or
+                            ('agree' in clean_label and 'agree' in label_lower) or
+                            ('consent' in clean_label and ('consent' in label_lower or 'data' in label_lower)) or
+                            ('i agree' in label_lower and 'agree' in clean_label)
+                        )
+                        
+                        if is_match:
+                            print(f"      ✓ Checkbox {i+1} matches: '{label_text[:50]}'")
+                            
+                            # Scroll and click
+                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", checkbox)
+                            time.sleep(0.3)
+                            
+                            # Check if already checked
+                            if checkbox.is_selected():
+                                print(f"      ✅ Already checked")
+                                return True
+                            
+                            # Click using JavaScript
+                            self.driver.execute_script("arguments[0].click();", checkbox)
+                            time.sleep(0.5)
+                            
+                            # Verify
+                            if checkbox.is_selected():
+                                print(f"      ✅ Checked successfully")
+                                return True
+                            else:
+                                # Try clicking the label instead
+                                if label_elem:
+                                    self.driver.execute_script("arguments[0].click();", label_elem)
+                                    time.sleep(0.5)
+                                    if checkbox.is_selected():
+                                        print(f"      ✅ Checked via label")
+                                        return True
+                            
+                    except Exception as e:
+                        continue
+                
+                print(f"      ⚠️  No matching checkbox found")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    
+            except Exception as e:
+                print(f"      ⚠️  Error: {str(e)[:60]}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+        
+        return False
+
     def click_button(self, text: str, threshold: float = 0.6) -> bool:
         context = self.extract_page_context()
         print(f"    🔍 Looking for: '{text}'")
@@ -317,7 +416,7 @@ class BrowserExecutor:
             return False
 
     def _detect_inputs(self) -> List[Dict]:
-        """Detect all input fields with improved label finding for ATS systems."""
+        """Detect all input fields with improved label finding for ATS systems - FIXED to detect SELECT elements."""
         inputs = []
 
         try:
@@ -331,7 +430,41 @@ class BrowserExecutor:
                         continue
 
                     input_elem = None
+                    input_type = 'text'
 
+                    # Check for SELECT elements first
+                    try:
+                        select_elem = label.find_element(By.XPATH, ".//select")
+                        if select_elem:
+                            inputs.append({
+                                'label': label_text,
+                                'type': 'select',
+                                'input_type': 'select',
+                                'required': '*' in label_text or select_elem.get_attribute('required') is not None
+                            })
+                            print(f"       OK: label '{label_text[:30]}' -> SELECT element")
+                            continue
+                    except:
+                        pass
+
+                    # Check for SELECT via @for attribute
+                    try:
+                        label_for = label.get_attribute('for')
+                        if label_for:
+                            select_elem = self.driver.find_element(By.XPATH, f"//select[@id='{label_for}']")
+                            if select_elem:
+                                inputs.append({
+                                    'label': label_text,
+                                    'type': 'select',
+                                    'input_type': 'select',
+                                    'required': '*' in label_text or select_elem.get_attribute('required') is not None
+                                })
+                                print(f"       OK: label '{label_text[:30]}' -> SELECT by @for")
+                                continue
+                    except:
+                        pass
+
+                    # Check for INPUT elements
                     try:
                         input_elem = label.find_element(By.XPATH, ".//input")
                     except:
@@ -354,6 +487,7 @@ class BrowserExecutor:
                         inputs.append({
                             'label': label_text,
                             'type': input_type,
+                            'input_type': input_type,
                             'required': '*' in label_text or input_elem.get_attribute('required') is not None
                         })
                         print(f"       OK: label '{label_text[:30]}' -> input type={input_type}")
@@ -389,6 +523,50 @@ class BrowserExecutor:
                             })
                     except:
                         pass
+
+            # ----- DETECT DATE PICKER BUTTONS -----
+            try:
+                date_xpath = (
+                    "//*[self::button or self::div or self::span]["
+                    "contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'earliest start') or "
+                    "contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'start date')]"
+                )
+                date_elems = self.driver.find_elements(By.XPATH, date_xpath)
+                for elem in date_elems:
+                    text = (elem.text or '').strip()
+                    if text and len(text) < 50:
+                        inputs.append({
+                            'label': text,
+                            'type': 'date_button',
+                            'required': True
+                        })
+                        print(f"       ✓ Date picker: '{text[:30]}'")
+            except Exception as e:
+                print(f"    ⚠️  Date picker detection error: {e}")
+            # --------------------------------------
+
+            # ----- DETECT SALARY FIELDS -----
+            try:
+                salary_xpath = (
+                    "//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'salary') or "
+                    "contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'salary')]"
+                )
+                salary_inputs = self.driver.find_elements(By.XPATH, salary_xpath)
+                for inp in salary_inputs:
+                    label = inp.get_attribute('placeholder') or inp.get_attribute('name') or 'Salary'
+                    inputs.append({
+                        'label': label,
+                        'type': inp.get_attribute('type') or 'text',
+                        'required': False
+                    })
+                    print(f"       ✓ Salary field: '{label}'")
+            except Exception as e:
+                print(f"    ⚠️  Salary detection error: {e}")
+            # ---------------------------------
 
             print(f"    DEBUG: Total inputs detected: {len(inputs)}")
 
@@ -533,102 +711,361 @@ class BrowserExecutor:
             self._log_action("fill", f"{label}={value}", False, f"Error: {e}")
             return False
 
-    def handle_date_field(self, label: str, days_from_now: int = 1) -> bool:
-        """
-        Generic date picker handler.
-        Finds a field labeled 'start date', 'earliest start date', etc.
-        Sets it to 'tomorrow' by default.
-        """
-        print(f"    📅 DATE: Looking for date field '{label}'")
+    def select_dropdown(self, label: str, value: str, threshold: float = 0.7) -> bool:
+        """Select value from a dropdown/select element - WORKING VERSION for csod.com."""
+        print(f"    🔽 DROPDOWN: '{label}' = '{value}'")
         
-        # Find the input or button that opens the date picker
-        search_label = label.lower().replace('*', '').strip()
-        date_element = None
-        
-        # Strategy 1: Look for an input with placeholder/aria-label containing date keywords
-        xpath_inputs = [
-            f"//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{search_label}')]",
-            f"//input[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{search_label}')]",
-            f"//label[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{search_label}')]/following::input[1]",
-        ]
-        
-        for xpath in xpath_inputs:
-            try:
-                elements = self.driver.find_elements(By.XPATH, xpath)
-                if elements:
-                    date_element = elements[0]
-                    print(f"      ✓ Found date input field")
+        try:
+            # Find the label
+            label_elem = None
+            label_variations = [
+                label,
+                label.replace('*', ''),
+                label.replace('*', '').strip(),
+            ]
+            
+            for lv in label_variations:
+                try:
+                    label_elem = self.driver.find_element(
+                        By.XPATH, 
+                        f"//label[contains(normalize-space(text()), '{lv}')]"
+                    )
                     break
+                except:
+                    try:
+                        label_elem = self.driver.find_element(
+                            By.XPATH,
+                            f"//label[contains(text(), '{lv}')]"
+                        )
+                        break
+                    except:
+                        continue
+            
+            if not label_elem:
+                print(f"      ❌ Label not found")
+                return False
+            
+            print(f"      ✓ Found label")
+            
+            # Find the select element - try multiple strategies
+            select_elem = None
+            
+            # Strategy 1: Parent container
+            try:
+                parent = label_elem.find_element(By.XPATH, "..")
+                select_elem = parent.find_element(By.TAG_NAME, "select")
+                print(f"      ✓ Found select in parent")
             except:
                 pass
-        
-        # Strategy 2: Look for a button that opens a date picker
-        if not date_element:
-            xpath_buttons = [
-                f"//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{search_label}')]",
-                f"//div[contains(@class, 'date') or contains(@class, 'calendar')]//button",
-                f"//input[@type='date']",  # native HTML5 date picker
-            ]
-            for xpath in xpath_buttons:
+            
+            # Strategy 2: Following sibling
+            if not select_elem:
                 try:
-                    elements = self.driver.find_elements(By.XPATH, xpath)
-                    if elements:
-                        date_element = elements[0]
-                        print(f"      ✓ Found date picker button")
-                        break
+                    select_elem = label_elem.find_element(By.XPATH, "./following-sibling::select[1]")
+                    print(f"      ✓ Found select as following sibling")
                 except:
                     pass
-        
-        if not date_element:
-            print(f"      ❌ No date field found")
-            self._log_action("date", label, False, "No date field found")
-            return False
-        
-        # Calculate tomorrow's date
-        from datetime import datetime, timedelta
-        tomorrow = (datetime.now() + timedelta(days=days_from_now)).strftime("%Y-%m-%d")
-        
-        # Method A: If it's a native HTML5 date input (type="date")
-        if date_element.get_attribute('type') == 'date':
-            try:
-                self.driver.execute_script(
-                    "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
-                    date_element, tomorrow
-                )
-                print(f"      ✅ Set native date picker to {tomorrow}")
-                self._log_action("date", label, True, f"Set to {tomorrow}")
-                return True
-            except Exception as e:
-                print(f"      ⚠️  Native date set failed: {e}")
-        
-        # Method B: Click to open calendar, then select date (simplified)
-        try:
-            # Click to open picker
-            self.driver.execute_script("arguments[0].click();", date_element)
-            time.sleep(1)
             
-            # Try to find today's date or next day in the calendar
-            # This is ATS-specific and may need tuning per site
-            today_str = datetime.now().strftime("%d")
-            tomorrow_str = tomorrow.split('-')[2]  # get day part
+            # Strategy 3: Look in grandparent (for grouped forms)
+            if not select_elem:
+                try:
+                    grandparent = label_elem.find_element(By.XPATH, "../..")
+                    select_elem = grandparent.find_element(By.TAG_NAME, "select")
+                    print(f"      ✓ Found select in grandparent")
+                except:
+                    pass
             
-            # Look for a button/link with today's date + 1
-            xpath_day = f"//button[contains(text(), '{tomorrow_str}')] | //td[contains(text(), '{tomorrow_str}')] | //div[contains(text(), '{tomorrow_str}')]"
-            day_elems = self.driver.find_elements(By.XPATH, xpath_day)
+            # Strategy 4: Any select after the label in document
+            if not select_elem:
+                try:
+                    select_elem = self.driver.find_element(
+                        By.XPATH,
+                        f"//label[contains(normalize-space(text()), '{label.replace('*', '')}')]/following::select[1]"
+                    )
+                    print(f"      ✓ Found select by document order")
+                except:
+                    pass
             
-            if day_elems:
-                self.driver.execute_script("arguments[0].click();", day_elems[0])
-                print(f"      ✅ Selected day {tomorrow_str} from calendar")
-                self._log_action("date", label, True, f"Selected day {tomorrow_str}")
-                return True
-            else:
-                print(f"      ⚠️  Could not select specific day, leaving as default")
-                self._log_action("date", label, False, "Could not select day")
+            if not select_elem:
+                print(f"      ❌ No select element found")
                 return False
-                
+            
+            # Scroll into view
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
+                select_elem
+            )
+            time.sleep(0.5)
+            
+            # Get all options
+            options = select_elem.find_elements(By.TAG_NAME, "option")
+            print(f"      📋 {len(options)} options available")
+            
+            # Find best match
+            best_match = None
+            
+            for option in options:
+                try:
+                    opt_text = (option.text or '').strip()
+                    opt_value = (option.get_attribute('value') or '').strip()
+                    
+                    # Skip empty/placeholder
+                    if not opt_text or opt_text.lower() in ['please select', 'bitte wählen', 'select...', '']:
+                        continue
+                    
+                    # Check for match
+                    if value.lower() == opt_text.lower():
+                        best_match = option
+                        print(f"      ✓ Exact match: '{opt_text}'")
+                        break
+                    
+                    if value.lower() in opt_text.lower():
+                        best_match = option
+                        print(f"      ✓ Partial match: '{opt_text}'")
+                        break
+                        
+                    # Special case for Austria - check for German name too
+                    if value.lower() == 'austria' and ('österreich' in opt_text.lower() or 'austria' in opt_text.lower()):
+                        best_match = option
+                        print(f"      ✓ Found Austria variant: '{opt_text}'")
+                        break
+                        
+                except:
+                    continue
+            
+            if not best_match:
+                print(f"      ⚠️  No match found for '{value}'")
+                # Show available options
+                available = [opt.text for opt in options if opt.text.strip() and opt.text.lower() not in ['please select', 'bitte wählen']]
+                print(f"      Available: {available[:10]}")
+                return False
+            
+            # Select using JavaScript for reliability
+            self.driver.execute_script("arguments[0].selected = true;", best_match)
+            
+            # Trigger change events
+            self.driver.execute_script(
+                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                select_elem
+            )
+            time.sleep(0.5)
+            
+            # Verify
+            selected_option = select_elem.find_element(By.CSS_SELECTOR, "option:checked")
+            selected_text = selected_option.text if selected_option else ''
+            
+            print(f"      ✅ Selected: '{selected_text}'")
+            return True
+            
         except Exception as e:
-            print(f"      ❌ Date picker interaction failed: {e}")
-            self._log_action("date", label, False, f"Error: {e}")
+            print(f"      ❌ Error: {e}")
+            return False
+
+    def handle_date_field(self, label: str, days_from_now: int = 1) -> bool:
+        """Handle date picker - robust version with partial text matching."""
+        print(f"    📅 DATE: '{label}'")
+        
+        target_date = datetime.now() + timedelta(days=days_from_now)
+        print(f"      Target: {target_date.strftime('%Y-%m-%d')}")
+        
+        clean_label = label.replace('*', '').strip().lower()
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                self._wait_for_dom_stable(timeout=2)
+                
+                # Strategy 1: Find by partial label text match (case insensitive)
+                date_input = None
+                calendar_button = None
+                
+                # Get all labels and find the one containing our text
+                all_labels = self.driver.find_elements(By.TAG_NAME, 'label')
+                target_label = None
+                
+                for lbl in all_labels:
+                    try:
+                        text = (lbl.text or '').strip().lower()
+                        if clean_label in text or text in clean_label:
+                            target_label = lbl
+                            print(f"      ✓ Found label: '{lbl.text}'")
+                            break
+                    except:
+                        continue
+                
+                if target_label:
+                    # Look for input in parent container
+                    try:
+                        parent = target_label.find_element(By.XPATH, "..")
+                        # Try to find input
+                        inputs = parent.find_elements(By.TAG_NAME, "input")
+                        for inp in inputs:
+                            if inp.is_displayed():
+                                date_input = inp
+                                print(f"      ✓ Found input in parent")
+                                break
+                        
+                        # Try to find calendar button
+                        buttons = parent.find_elements(By.TAG_NAME, "button")
+                        for btn in buttons:
+                            if btn.is_displayed():
+                                calendar_button = btn
+                                print(f"      ✓ Found button in parent")
+                                break
+                                
+                    except Exception as e:
+                        print(f"      ⚠️  Parent search failed: {e}")
+                
+                # Strategy 2: If we have a calendar button, click it
+                if calendar_button:
+                    try:
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", calendar_button)
+                        time.sleep(0.3)
+                        self.driver.execute_script("arguments[0].click();", calendar_button)
+                        print(f"      🗓️  Opened calendar")
+                        time.sleep(2)
+                        
+                        if self._select_date_from_calendar(target_date):
+                            return True
+                    except Exception as e:
+                        print(f"      ⚠️  Calendar button failed: {e}")
+                
+                # Strategy 3: Direct input
+                if date_input:
+                    # Try European format first
+                    date_formats = [
+                        target_date.strftime("%d.%m.%Y"),
+                        target_date.strftime("%Y-%m-%d"),
+                        target_date.strftime("%d/%m/%Y"),
+                    ]
+                    
+                    for fmt in date_formats:
+                        try:
+                            # Clear
+                            self.driver.execute_script("arguments[0].value = '';", date_input)
+                            time.sleep(0.2)
+                            
+                            # Click and enter
+                            date_input.click()
+                            time.sleep(0.2)
+                            date_input.clear()
+                            date_input.send_keys(fmt)
+                            time.sleep(0.3)
+                            
+                            # Trigger change
+                            self.driver.execute_script(
+                                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                                date_input
+                            )
+                            time.sleep(0.5)
+                            
+                            # Check
+                            actual = date_input.get_attribute('value')
+                            if actual:
+                                print(f"      ✅ Entered: {actual}")
+                                return True
+                        except:
+                            continue
+                    
+                    # JavaScript fallback
+                    for fmt in date_formats:
+                        try:
+                            self.driver.execute_script(
+                                "arguments[0].value = arguments[1];"
+                                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                                date_input, fmt
+                            )
+                            time.sleep(0.5)
+                            actual = date_input.get_attribute('value')
+                            if actual:
+                                print(f"      ✅ Set via JS: {actual}")
+                                return True
+                        except:
+                            continue
+                
+                # Strategy 4: Look for any visible date input
+                if not date_input:
+                    try:
+                        inputs = self.driver.find_elements(By.XPATH, "//input[@type='date' or contains(@class, 'date')]")
+                        for inp in inputs:
+                            if inp.is_displayed():
+                                date_input = inp
+                                print(f"      ✓ Found date input by type/class")
+                                # Try to fill it
+                                date_input.click()
+                                date_input.clear()
+                                date_input.send_keys(target_date.strftime("%d.%m.%Y"))
+                                time.sleep(0.5)
+                                if date_input.get_attribute('value'):
+                                    print(f"      ✅ Filled generic date input")
+                                    return True
+                                break
+                    except:
+                        pass
+                
+                if attempt < max_retries - 1:
+                    print(f"      🔄 Retrying...")
+                    time.sleep(1)
+                    
+            except Exception as e:
+                print(f"      ⚠️  Error: {str(e)[:60]}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+        
+        print(f"      ❌ Failed after {max_retries} attempts")
+        return False
+    
+    def _select_date_from_calendar(self, target_date: datetime) -> bool:
+        """Select date from calendar popup."""
+        try:
+            day = target_date.day
+            print(f"      📆 Selecting day {day}...")
+            
+            time.sleep(1.5)  # Wait for calendar
+            
+            # Multiple strategies to find the day
+            selectors = [
+                f"//td[not(contains(@class, 'disabled')) and text()='{day}']",
+                f"//button[text()='{day}']",
+                f"//div[contains(@class, 'day') and text()='{day}']",
+                f"//td[@data-day='{day}']",
+                f"//div[contains(@class, 'calendar')]//td[text()='{day}']",
+            ]
+            
+            for selector in selectors:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                    for elem in elements:
+                        if elem.is_displayed():
+                            # Check not disabled
+                            classes = elem.get_attribute('class') or ''
+                            if 'disabled' not in classes and 'muted' not in classes:
+                                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem)
+                                time.sleep(0.3)
+                                self.driver.execute_script("arguments[0].click();", elem)
+                                print(f"      ✅ Selected day {day}")
+                                time.sleep(0.5)
+                                return True
+                except:
+                    continue
+            
+            # Try "Tomorrow" button if available
+            try:
+                tomorrow_btn = self.driver.find_element(
+                    By.XPATH,
+                    "//button[contains(text(), 'Tomorrow') or contains(@aria-label, 'Tomorrow')]"
+                )
+                self.driver.execute_script("arguments[0].click();", tomorrow_btn)
+                print(f"      ✅ Clicked 'Tomorrow'")
+                return True
+            except:
+                pass
+            
+            print(f"      ⚠️  Could not select day {day}")
+            return False
+            
+        except Exception as e:
+            print(f"      ❌ Calendar error: {e}")
             return False
 
     def _fill_by_label_for(self, label: str, value: str) -> bool:
@@ -1003,7 +1440,15 @@ class BrowserExecutor:
             if action.type in ['CLICK', 'FILL']:
                 kwargs['threshold'] = 0.6 if action.type == 'CLICK' else 0.7
 
-            success = method(**kwargs)
+            # Special handling for CLICK - try button first, then checkbox if failed
+            if action.type == 'CLICK':
+                success = self.click_button(**kwargs)
+                if not success:
+                    # Retry as checkbox
+                    success = self.click_checkbox(**kwargs)
+            else:
+                success = method(**kwargs)
+            
             metric.end_time = time.time()
             metric.success = success
             metric.dom_hash_after = self._compute_dom_hash()
