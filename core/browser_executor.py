@@ -1,7 +1,8 @@
 """
-Browser Executor v3.1 - DOM Stability + Observability
+Browser Executor v3.1 - DOM Stability + Observability + Smart Page Detection
 """
 
+from multiprocessing import context
 import time
 import hashlib
 from typing import Optional, Dict, List, Tuple
@@ -11,11 +12,53 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
-    TimeoutException, NoSuchElementException, 
+    TimeoutException, NoSuchElementException,
     StaleElementReferenceException, WebDriverException
 )
+from sqlalchemy import text
+from urllib.parse import urlparse
 
 from core.action_protocol import Action
+
+
+# ATS Platform Fingerprints - known application systems
+ATS_FINGERPRINTS = {
+    'csod.com': {
+        'name': 'Cornerstone OnDemand',
+        'form_wait_seconds': 5,
+        'uses_iframes': False,
+        'cookie_btn': 'Akzeptieren',
+        'input_strategy': 'label-first'
+    },
+    'greenhouse.io': {
+        'name': 'Greenhouse',
+        'form_wait_seconds': 3,
+        'uses_iframes': False,
+        'cookie_btn': 'Accept Cookies',
+        'input_strategy': 'label-first'
+    },
+    'personio.de': {
+        'name': 'Personio',
+        'form_wait_seconds': 4,
+        'uses_iframes': True,
+        'cookie_btn': 'Alle akzeptieren',
+        'input_strategy': 'iframe-first'
+    },
+    'workday.com': {
+        'name': 'Workday',
+        'form_wait_seconds': 6,
+        'uses_iframes': True,
+        'cookie_btn': 'OK',
+        'input_strategy': 'iframe-first'
+    },
+    'lever.co': {
+        'name': 'Lever',
+        'form_wait_seconds': 3,
+        'uses_iframes': False,
+        'cookie_btn': 'Accept',
+        'input_strategy': 'label-first'
+    }
+}
 
 
 @dataclass
@@ -25,11 +68,11 @@ class PageContext:
     buttons: List[str]
     inputs: List[Dict]
     file_inputs: List[str]
-    textareas: List[str]
+    textareas: List[Dict]
     select_boxes: List[str]
     visible_text: str
-    # v3.1: Add DOM snapshot hash for observability
     dom_hash: str = ""
+    page_type: str = "UNKNOWN"
 
 
 @dataclass
@@ -43,7 +86,7 @@ class ActionMetrics:
     dom_hash_before: str = ""
     dom_hash_after: str = ""
     retry_count: int = 0
-    
+
     @property
     def latency(self) -> float:
         return self.end_time - self.start_time
@@ -57,64 +100,60 @@ class BrowserExecutor:
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-blink-features=AutomationControlled')
-        
+        options.add_argument('--disable-notifications')
+
         self.driver = webdriver.Chrome(options=options)
-        self.wait = WebDriverWait(self.driver, 10)
+        self.driver_wait = WebDriverWait(self.driver, 10)
         self.action_log: List[Dict] = []
-        self.metrics: List[ActionMetrics] = []  # v3.1
-    
-    # v3.1: DOM stability check
+        self.metrics: List[ActionMetrics] = []
+        self.ats_config: Optional[Dict] = None  # Detected ATS platform config
+
     def _wait_for_dom_stable(self, timeout: int = 5) -> bool:
         """Wait for DOM to stabilize (no changes for 500ms)."""
         try:
             prev_hash = ""
             stable_count = 0
-            
+
             for _ in range(timeout * 2):
                 curr_hash = self._compute_dom_hash()
                 if curr_hash == prev_hash:
                     stable_count += 1
-                    if stable_count >= 2:  # 1 second stable
+                    if stable_count >= 2:
                         return True
                 else:
                     stable_count = 0
                 prev_hash = curr_hash
                 time.sleep(0.5)
-            
+
             return False
         except:
-            return True  # Proceed anyway if check fails
-    
+            return True
+
     def _compute_dom_hash(self) -> str:
         """Compute hash of current DOM state."""
         try:
             body = self.driver.find_element(By.TAG_NAME, "body")
-            # Hash of element count + visible text length
             elements = len(self.driver.find_elements(By.XPATH, "//*"))
             text_len = len(body.text)
             return hashlib.md5(f"{elements}:{text_len}".encode()).hexdigest()[:8]
         except:
             return "unknown"
-    
-    # v3.1: Wrapped execution with stability and retry
+
     def _execute_with_stability(self, method, **kwargs) -> Tuple[bool, str]:
         """Execute method with DOM stability check and retry."""
         max_retries = 3
-        dom_hash_before = self._compute_dom_hash()
-        
+
         for attempt in range(max_retries):
             try:
-                # Wait for DOM stable before action
                 if not self._wait_for_dom_stable(timeout=3):
                     if attempt < max_retries - 1:
                         continue
-                
-                # Re-fetch element if needed (for click/fill)
+
                 success = method(**kwargs)
-                
+
                 if success:
                     return True, f"Success on attempt {attempt + 1}"
-                
+
             except StaleElementReferenceException:
                 if attempt < max_retries - 1:
                     time.sleep(0.5)
@@ -125,101 +164,514 @@ class BrowserExecutor:
                     time.sleep(0.5)
                     continue
                 return False, str(e)
-        
+
         return False, "Max retries exceeded"
-    
+
     def navigate(self, url: str) -> bool:
         try:
             self.driver.get(url)
             self._wait_for_dom_stable()
+            
+            # Detect ATS platform
+            self._detect_ats_platform(url)
+            if self.ats_config:
+                print(f"    🏢 Detected ATS: {self.ats_config['name']}")
+            
             self._log_action("navigate", url, True)
             return True
         except Exception as e:
             self._log_action("navigate", url, False, str(e))
             return False
     
-    # v3.1: Fuzzy label matching with confidence
+    def _detect_ats_platform(self, url: str):
+        """Detect known ATS platform from URL."""
+        domain = urlparse(url).netloc
+        for ats_domain, config in ATS_FINGERPRINTS.items():
+            if ats_domain in domain:
+                self.ats_config = config
+                return
+        self.ats_config = None
+
     def _resolve_label(self, label: str, candidates: List[str], threshold: float = 0.6) -> Tuple[Optional[str], float]:
         """Resolve label using fuzzy matching."""
         from core.action_protocol import ActionSchema
         best_match = None
         best_score = 0.0
-        
+
         for candidate in candidates:
             score = ActionSchema._fuzzy_match(label, [candidate])
             if score > best_score and score >= threshold:
                 best_score = score
                 best_match = candidate
-        
+
         return best_match, best_score
-    
+
     def click_button(self, text: str, threshold: float = 0.6) -> bool:
-        # v3.1: Get current buttons and resolve fuzzy match
         context = self.extract_page_context()
+        print(f"    🔍 Looking for: '{text}'")
+        print(f"    📋 Available: {context.buttons[:10]}")
+
         resolved, confidence = self._resolve_label(text, context.buttons, threshold)
-        
-        if not resolved:
-            self._log_action("click", f"{text} (unresolved)", False, f"No match above {threshold}")
+        print(f"    🎯 Resolved: '{resolved}' (confidence: {confidence:.2f})")
+
+        if confidence < threshold:
+            print(f"    ❌ Below threshold {threshold}")
             return False
-        
-        # Try to click resolved label
-        xpath = f"//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{resolved.lower()}')]"
-        
+
+        strategies = [
+            f"//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{resolved.lower()}')]",
+            f"//a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{resolved.lower()}')]",
+            f"//input[@type='button' and contains(translate(@value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{resolved.lower()}')]",
+            f"//div[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{resolved.lower()}')]",
+            f"//span[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{resolved.lower()}')]",
+        ]
+
         def do_click():
-            element = self.wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
-            element.click()
-            time.sleep(1)
-            return True
-        
+            for xpath in strategies:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, xpath)
+                    for elem in elements:
+                        if elem.is_displayed() and elem.is_enabled():
+                            elem.click()
+                            time.sleep(1)
+                            return True
+                except:
+                    continue
+            return False
+
         success, msg = self._execute_with_stability(do_click)
         self._log_action("click", f"{text} -> {resolved} ({confidence:.2f})", success, None if success else msg)
         return success
-    
-    def fill_input(self, label: str, value: str, threshold: float = 0.7) -> bool:
-        # v3.1: Resolve label against available inputs
-        context = self.extract_page_context()
-        input_labels = [inp.get('label', '') for inp in context.inputs]
-        resolved, confidence = self._resolve_label(label, input_labels, threshold)
-        
-        if not resolved:
-            self._log_action("fill", f"{label}={value} (unresolved)", False, f"No match above {threshold}")
+
+    def accept_cookies(self) -> bool:
+        """Try multiple cookie consent patterns - improved for German sites."""
+        patterns = [
+            "Alle akzeptieren",
+            "Alle Cookies akzeptieren",
+            "Zustimmen",
+            "Akzeptieren",
+            "Einverstanden",
+            "Verstanden",
+            "OK",
+            "Ja",
+            "Accept all cookies",
+            "Accept all",
+            "I agree",
+            "Agree",
+            "Allow all",
+            "Continue",
+        ]
+
+        for pattern in patterns:
+            if self.click_button(pattern, threshold=0.8):
+                print(f"    ✅ Accepted cookies: '{pattern}'")
+                return True
+
+        print("    ⚠️  Could not find cookie button automatically")
+        return False
+
+    def switch_to_new_tab(self) -> bool:
+        """Switch to the most recently opened tab."""
+        try:
+            handles = self.driver.window_handles
+
+            if len(handles) > 1:
+                self.driver.switch_to.window(handles[-1])
+                print(f"    🔄 Switched to new tab: {self.driver.current_url[:60]}...")
+                self._wait_for_dom_stable(timeout=3)
+                return True
             return False
+        except Exception as e:
+            print(f"    ⚠️  Failed to switch tab: {e}")
+            return False
+
+    def close_current_tab_and_switch_back(self) -> bool:
+        """Close current tab and switch back to first tab."""
+        try:
+            handles = self.driver.window_handles
+            if len(handles) > 1:
+                self.driver.close()
+                self.driver.switch_to.window(handles[0])
+                return True
+            return False
+        except:
+            return False
+
+    def switch_to_form_iframe(self) -> bool:
+        """Try to find and switch to form iframe."""
+        try:
+            iframes = self.driver.find_elements(By.TAG_NAME, 'iframe')
+            for i, iframe in enumerate(iframes):
+                try:
+                    self.driver.switch_to.frame(iframe)
+                    inputs = self.driver.find_elements(By.TAG_NAME, 'input')
+                    if len(inputs) > 2:
+                        print(f"    🔄 Switched to iframe {i + 1} with {len(inputs)} inputs")
+                        return True
+                    self.driver.switch_to.default_content()
+                except:
+                    self.driver.switch_to.default_content()
+                    continue
+            return False
+        except:
+            return False
+
+    def _detect_inputs(self) -> List[Dict]:
+        """Detect all input fields with improved label finding for ATS systems."""
+        inputs = []
+
+        try:
+            labels = self.driver.find_elements(By.TAG_NAME, 'label')
+            print(f"    DEBUG: Found {len(labels)} <label> elements")
+
+            for label in labels:
+                try:
+                    label_text = (label.text or '').strip()
+                    if not label_text:
+                        continue
+
+                    input_elem = None
+
+                    try:
+                        input_elem = label.find_element(By.XPATH, ".//input")
+                    except:
+                        pass
+
+                    if not input_elem:
+                        try:
+                            input_elem = label.find_element(By.XPATH, "./following-sibling::input[1]")
+                        except:
+                            pass
+
+                    if not input_elem:
+                        try:
+                            input_elem = label.find_element(By.XPATH, "./following-sibling::*[1]//input")
+                        except:
+                            pass
+
+                    if input_elem:
+                        input_type = input_elem.get_attribute('type') or 'text'
+                        inputs.append({
+                            'label': label_text,
+                            'type': input_type,
+                            'required': '*' in label_text or input_elem.get_attribute('required') is not None
+                        })
+                        print(f"       OK: label '{label_text[:30]}' -> input type={input_type}")
+                except:
+                    continue
+
+            if len(inputs) < 3:
+                print("    DEBUG: Few inputs from labels, trying placeholders...")
+                xpath = "//input[@placeholder]"
+                for elem in self.driver.find_elements(By.XPATH, xpath):
+                    placeholder = elem.get_attribute('placeholder')
+                    if placeholder:
+                        inputs.append({
+                            'label': placeholder,
+                            'type': elem.get_attribute('type') or 'text',
+                            'required': elem.get_attribute('required') is not None
+                        })
+
+            if len(inputs) < 3:
+                print("    DEBUG: Trying to find inputs by nearby text...")
+                all_inputs = self.driver.find_elements(
+                    By.XPATH,
+                    "//input[@type='text' or @type='email' or not(@type)]"
+                )
+                for inp in all_inputs:
+                    try:
+                        prev_text = inp.find_element(By.XPATH, "./preceding-sibling::*[1]").text
+                        if prev_text and len(prev_text) < 50:
+                            inputs.append({
+                                'label': prev_text,
+                                'type': inp.get_attribute('type') or 'text',
+                                'required': False
+                            })
+                    except:
+                        pass
+
+            print(f"    DEBUG: Total inputs detected: {len(inputs)}")
+
+        except Exception as e:
+            print(f"    WARNING: Error detecting inputs: {e}")
+
+        return inputs
+
+    def _detect_textareas(self) -> List[Dict]:
+        textareas = []
+        try:
+            for elem in self.driver.find_elements(By.TAG_NAME, "textarea"):
+                label = elem.get_attribute('aria-label') or elem.get_attribute('placeholder')
+
+                if not label:
+                    try:
+                        label_elem = elem.find_element(By.XPATH, "./preceding-sibling::label")
+                        label = label_elem.text
+                    except:
+                        pass
+
+                if not label:
+                    label = elem.get_attribute('name') or 'textarea'
+
+                textareas.append({
+                    'label': label.replace('\n', ' ').strip(),
+                    'type': 'textarea',
+                    'required': elem.get_attribute('required') is not None
+                })
+        except:
+            return textareas
+
+        return textareas
+
+    def fill_input(self, label: str, value: str, threshold: float = 0.7) -> bool:
+        """Fill input by finding label text and associated input field."""
+        print(f"    🔍 FILL: Looking for label '{label}'")
+
+        search_label = label.replace('*', '').strip()
+        label_elem = None
+
+        try:
+            label_elem = self.driver.find_element(
+                By.XPATH,
+                f"//label[contains(normalize-space(text()), '{search_label}')]"
+            )
+            print("    ✓ Found label with contains()")
+        except Exception as e:
+            print(f"    ⚠️  Contains search failed: {e}")
+
+        if not label_elem:
+            try:
+                label_elem = self.driver.find_element(By.XPATH, f"//label[text()='{label}']")
+                print("    ✓ Found exact label match")
+            except:
+                pass
+
+        if not label_elem:
+            try:
+                all_labels = self.driver.find_elements(By.TAG_NAME, 'label')
+                for lbl in all_labels:
+                    lbl_text = (lbl.text or '').strip()
+                    if search_label.lower() in lbl_text.lower():
+                        label_elem = lbl
+                        print(f"    ✓ Found label by iteration: '{lbl_text}'")
+                        break
+            except:
+                pass
+
+        if not label_elem:
+            print("    ❌ Label not found")
+            self._log_action("fill", f"{label}={value} (unresolved)", False, "Label not found")
+            return False
+
+        actual_label_text = (label_elem.text or '').strip()
+        print(f"    📋 Actual label text: '{actual_label_text}'")
+
+        input_field = None
+
+        try:
+            input_field = label_elem.find_element(By.XPATH, ".//input")
+            print("    ✓ Found input inside label")
+        except:
+            pass
+
+        if not input_field:
+            try:
+                input_field = label_elem.find_element(By.XPATH, "./following-sibling::input[1]")
+                print("    ✓ Found input as sibling")
+            except:
+                pass
+
+        if not input_field:
+            try:
+                input_field = label_elem.find_element(By.XPATH, "./parent::*/following-sibling::*[1]//input")
+                print("    ✓ Found input in parent's sibling")
+            except:
+                pass
+
+        if not input_field:
+            try:
+                input_field = self.driver.find_element(
+                    By.XPATH,
+                    f"//label[contains(normalize-space(text()), '{search_label}')]/following::input[1]"
+                )
+                print("    ✓ Found input by document order")
+            except:
+                pass
+
+        if not input_field:
+            print("    ❌ No input found for label")
+            self._log_action("fill", f"{label}={value}", False, "No input for label")
+            return False
+
+        # --- ROBUST FILL: Use JavaScript to bypass overlays ---
+        try:
+            # Scroll into view
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
+                input_field
+            )
+            time.sleep(0.3)
+            
+            # Force focus and set value via JavaScript (bypasses click interception)
+            self.driver.execute_script(
+                "arguments[0].focus(); arguments[0].value = arguments[1];",
+                input_field, value
+            )
+            
+            # Trigger change event (some sites listen for it)
+            self.driver.execute_script(
+                "arguments[0].dispatchEvent(new Event('change', { bubbles: true }));",
+                input_field
+            )
+            
+            print(f"    ✅ Filled '{label}' with '{value}' (JS)")
+            self._log_action("fill", f"{label}={value}", True)
+            return True
+            
+        except Exception as e:
+            print(f"    ❌ Error filling: {e}")
+            self._log_action("fill", f"{label}={value}", False, f"Error: {e}")
+            return False
+
+    def handle_date_field(self, label: str, days_from_now: int = 1) -> bool:
+        """
+        Generic date picker handler.
+        Finds a field labeled 'start date', 'earliest start date', etc.
+        Sets it to 'tomorrow' by default.
+        """
+        print(f"    📅 DATE: Looking for date field '{label}'")
         
-        # Try multiple strategies with resolved label
-        strategies = [
-            lambda: self._fill_by_label_for(resolved, value),
-            lambda: self._fill_by_placeholder(resolved, value),
-            lambda: self._fill_by_following(resolved, value),
+        # Find the input or button that opens the date picker
+        search_label = label.lower().replace('*', '').strip()
+        date_element = None
+        
+        # Strategy 1: Look for an input with placeholder/aria-label containing date keywords
+        xpath_inputs = [
+            f"//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{search_label}')]",
+            f"//input[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{search_label}')]",
+            f"//label[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{search_label}')]/following::input[1]",
         ]
         
-        for strategy in strategies:
-            success, msg = self._execute_with_stability(strategy)
-            if success:
-                self._log_action("fill", f"{label} -> {resolved}={value} ({confidence:.2f})", True)
-                return True
+        for xpath in xpath_inputs:
+            try:
+                elements = self.driver.find_elements(By.XPATH, xpath)
+                if elements:
+                    date_element = elements[0]
+                    print(f"      ✓ Found date input field")
+                    break
+            except:
+                pass
         
-        self._log_action("fill", f"{label}={value}", False, "All strategies failed")
-        return False
-    
+        # Strategy 2: Look for a button that opens a date picker
+        if not date_element:
+            xpath_buttons = [
+                f"//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', 'abcdefghijklmnopqrstuvwxyzäöü'), '{search_label}')]",
+                f"//div[contains(@class, 'date') or contains(@class, 'calendar')]//button",
+                f"//input[@type='date']",  # native HTML5 date picker
+            ]
+            for xpath in xpath_buttons:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, xpath)
+                    if elements:
+                        date_element = elements[0]
+                        print(f"      ✓ Found date picker button")
+                        break
+                except:
+                    pass
+        
+        if not date_element:
+            print(f"      ❌ No date field found")
+            self._log_action("date", label, False, "No date field found")
+            return False
+        
+        # Calculate tomorrow's date
+        from datetime import datetime, timedelta
+        tomorrow = (datetime.now() + timedelta(days=days_from_now)).strftime("%Y-%m-%d")
+        
+        # Method A: If it's a native HTML5 date input (type="date")
+        if date_element.get_attribute('type') == 'date':
+            try:
+                self.driver.execute_script(
+                    "arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                    date_element, tomorrow
+                )
+                print(f"      ✅ Set native date picker to {tomorrow}")
+                self._log_action("date", label, True, f"Set to {tomorrow}")
+                return True
+            except Exception as e:
+                print(f"      ⚠️  Native date set failed: {e}")
+        
+        # Method B: Click to open calendar, then select date (simplified)
+        try:
+            # Click to open picker
+            self.driver.execute_script("arguments[0].click();", date_element)
+            time.sleep(1)
+            
+            # Try to find today's date or next day in the calendar
+            # This is ATS-specific and may need tuning per site
+            today_str = datetime.now().strftime("%d")
+            tomorrow_str = tomorrow.split('-')[2]  # get day part
+            
+            # Look for a button/link with today's date + 1
+            xpath_day = f"//button[contains(text(), '{tomorrow_str}')] | //td[contains(text(), '{tomorrow_str}')] | //div[contains(text(), '{tomorrow_str}')]"
+            day_elems = self.driver.find_elements(By.XPATH, xpath_day)
+            
+            if day_elems:
+                self.driver.execute_script("arguments[0].click();", day_elems[0])
+                print(f"      ✅ Selected day {tomorrow_str} from calendar")
+                self._log_action("date", label, True, f"Selected day {tomorrow_str}")
+                return True
+            else:
+                print(f"      ⚠️  Could not select specific day, leaving as default")
+                self._log_action("date", label, False, "Could not select day")
+                return False
+                
+        except Exception as e:
+            print(f"      ❌ Date picker interaction failed: {e}")
+            self._log_action("date", label, False, f"Error: {e}")
+            return False
+
     def _fill_by_label_for(self, label: str, value: str) -> bool:
-        label_elem = self.driver.find_element(By.XPATH, f"//label[contains(text(), '{label}')]")
-        input_id = label_elem.get_attribute('for')
-        if input_id:
-            input_field = self.driver.find_element(By.ID, input_id)
+        """Fill input by finding label text, then associated input."""
+        try:
+            label_elem = self.driver.find_element(By.XPATH, f"//label[text()='{label}']")
+            try:
+                input_field = label_elem.find_element(By.XPATH, ".//input")
+            except:
+                input_field = self.driver.find_element(
+                    By.XPATH,
+                    f"//label[text()='{label}']/following::input[1]"
+                )
             input_field.clear()
             input_field.send_keys(value)
             return True
-        return False
-    
+        except:
+            pass
+
+        try:
+            label_elem = self.driver.find_element(By.XPATH, f"//label[contains(text(), '{label}')]")
+            try:
+                input_field = label_elem.find_element(By.XPATH, ".//input")
+            except:
+                input_field = self.driver.find_element(
+                    By.XPATH,
+                    f"//label[contains(text(), '{label}')]/following::input[1]"
+                )
+            input_field.clear()
+            input_field.send_keys(value)
+            return True
+        except:
+            return False
+
     def _fill_by_placeholder(self, label: str, value: str) -> bool:
         input_field = self.driver.find_element(
-            By.XPATH, 
+            By.XPATH,
             f"//input[contains(@placeholder, '{label}') or contains(@name, '{label.lower()}')]"
         )
         input_field.clear()
         input_field.send_keys(value)
         return True
-    
+
     def _fill_by_following(self, label: str, value: str) -> bool:
         input_field = self.driver.find_element(
             By.XPATH,
@@ -228,105 +680,317 @@ class BrowserExecutor:
         input_field.clear()
         input_field.send_keys(value)
         return True
-    
+
+    def _fill_by_name(self, label: str, value: str) -> bool:
+        """Fill by input name attribute."""
+        input_field = self.driver.find_element(
+            By.XPATH,
+            f"//input[contains(@name, '{label.lower()}')]"
+        )
+        input_field.clear()
+        input_field.send_keys(value)
+        return True
+
     def upload_file(self, label: str, path: str) -> bool:
-        def do_upload():
-            input_field = self.driver.find_element(
-                By.XPATH,
-                f"//input[@type='file'] | //label[contains(text(), '{label}')]/following::input[@type='file'][1]"
-            )
-            input_field.send_keys(path)
-            return True
+        """Upload file with UNIVERSAL completion polling and filename length safety."""
+        from pathlib import Path
         
+        # ----- FILENAME LENGTH SAFETY (belt-and-suspenders) -----
+        path_obj = Path(path)
+        upload_path = path
+        temp_file = None
+        
+        if len(path_obj.name) > 45:  # ATS limit is often 50, leave buffer
+            print(f"      ⚠️  Filename too long ({len(path_obj.name)} chars), creating short copy...")
+            import shutil
+            # Create short filename: cv_<8-char-id>.docx
+            short_id = str(int(time.time()))[-8:]
+            short_name = f"cv_{short_id}{path_obj.suffix}"
+            temp_file = path_obj.parent / short_name
+            shutil.copy2(path_obj, temp_file)
+            upload_path = str(temp_file)
+            print(f"      📎 Using temporary: {short_name} ({len(short_name)} chars)")
+        # ---------------------------------------------------------
+        
+        def do_upload():
+            strategies = [
+                "//input[@type='file']",
+                f"//label[contains(text(), '{label}')]/following::input[@type='file'][1]",
+                f"//div[contains(text(), '{label}')]//input[@type='file']",
+                f"//button[contains(text(), '{label}')]/..//input[@type='file']",
+            ]
+
+            for xpath in strategies:
+                try:
+                    input_field = self.driver.find_element(By.XPATH, xpath)
+                    if input_field.is_displayed() or True:
+                        input_field.send_keys(upload_path)
+                        
+                        # ----- GENERIC UPLOAD WAIT (works on any site) -----
+                        filename = Path(upload_path).name
+                        print(f"      ⏳ Uploading {filename}...")
+                        start = time.time()
+                        uploaded = False
+                        
+                        while time.time() - start < 30:
+                            # Check if filename appears anywhere in the page
+                            if filename in self.driver.page_source:
+                                uploaded = True
+                                break
+                            
+                            # Check if the input's value is set (some browsers show it)
+                            try:
+                                input_val = input_field.get_attribute('value')
+                                if input_val and filename in input_val:
+                                    uploaded = True
+                                    break
+                            except:
+                                pass
+                            
+                            # Check for upload success indicators
+                            page_lower = self.driver.page_source.lower()
+                            if any(indicator in page_lower for indicator in [
+                                'uploaded', 'complete', 'success', 'done', 
+                                'hochgeladen', 'erfolgreich', 'fertig'
+                            ]):
+                                uploaded = True
+                                break
+                            
+                            time.sleep(0.5)
+                        # ---------------------------------------------------
+                        
+                        if uploaded:
+                            print(f"      ✅ Upload confirmed")
+                        else:
+                            print(f"      ⚠️  Upload may still be in progress (will proceed)")
+                        
+                        return True
+                except Exception as e:
+                    continue
+            return False
+
         success, msg = self._execute_with_stability(do_upload)
+        
+        # Cleanup temp file if created
+        if temp_file and temp_file.exists():
+            try:
+                temp_file.unlink()
+                print(f"      🧹 Cleaned up temporary file")
+            except:
+                pass
+        
         self._log_action("upload", f"{label}={path}", success, None if success else msg)
         return success
-    
+
     def wait(self, seconds: int = 2) -> bool:
         time.sleep(seconds)
         return True
+
+    def do_wait(self, seconds: int = 2) -> bool:
+        """Alias to support WAIT actions mapped to do_wait."""
+        return self.wait(seconds)
     
+    def wait_for_element(self, by: By, value: str, timeout: int = 10) -> bool:
+        """Wait for an element to be present and visible (dynamic wait)."""
+        try:
+            WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((by, value))
+            )
+            return True
+        except TimeoutException:
+            return False
+    
+    def wait_for_form_inputs(self, timeout: int = 15) -> int:
+        """Wait for form inputs to appear and return count."""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            inputs = self.driver.find_elements(By.XPATH, "//input[@type!='hidden']")
+            if len(inputs) > 0:
+                return len(inputs)
+            time.sleep(0.5)
+        return 0
+
     def screenshot(self, path: str) -> bool:
         try:
             self.driver.save_screenshot(path)
             return True
         except:
             return False
-    
+
     def stop(self, reason: str = "COMPLETE") -> bool:
         self._log_action("STOP", reason, True)
         return True
-    
+
     def report(self, message: str) -> bool:
+        """REPORT action - for debugging and status updates."""
         self._log_action("REPORT", message, True)
+        print(f"    📢 {message}")
+
+        if "cookie" in message.lower():
+            print("    🍪 Checking for cookie banner...")
+            return self.accept_cookies()
+
         return True
-    
+
     def extract_page_context(self) -> PageContext:
         url = self.driver.current_url
         title = self.driver.title
-        
+
+        try:
+            body_text = self.driver.find_element(By.TAG_NAME, 'body').text[:500]
+            print(f"    🔍 DEBUG: Page text preview: {body_text[:100]}...")
+        except:
+            pass
+
         buttons = []
         try:
-            for elem in self.driver.find_elements(By.XPATH, "//button | //a[@role='button']"):
-                text = elem.text or elem.get_attribute('value') or ''
-                if text.strip():
-                    buttons.append(text.strip())
+            selectors = [
+                "//button",
+                "//a[@role='button']",
+                "//a[contains(@class, 'btn')]",
+                "//input[@type='button']",
+                "//input[@type='submit']",
+                "//div[contains(@class, 'button')]",
+                "//span[contains(@class, 'button')]",
+                "//a[contains(@href, 'javascript')]",
+            ]
+
+            for selector in selectors:
+                try:
+                    for elem in self.driver.find_elements(By.XPATH, selector):
+                        text = (elem.text or elem.get_attribute('value') or '').replace('\n', ' ').strip()
+                        aria_label = (elem.get_attribute('aria-label') or '').replace('\n', ' ').strip()
+                        if text:
+                            buttons.append(text)
+                        elif aria_label:
+                            buttons.append(aria_label)
+                except:
+                    continue
         except:
             pass
-        
-        inputs = []
-        try:
-            for elem in self.driver.find_elements(By.XPATH, "//input[@type='text'] | //input[@type='email'] | //input[@type='tel']"):
-                label = elem.get_attribute('placeholder') or elem.get_attribute('aria-label') or elem.get_attribute('name') or 'unknown'
-                inputs.append({
-                    'label': label,
-                    'type': elem.get_attribute('type') or 'text',
-                    'required': elem.get_attribute('required') is not None
-                })
-        except:
-            pass
-        
+
+        inputs = self._detect_inputs()
+        textareas = []
+
+        if len(inputs) < 3:
+            print(f"    🔍 Only {len(inputs)} inputs found, checking for iframe...")
+            if self.switch_to_form_iframe():
+                iframe_inputs = self._detect_inputs()
+                if len(iframe_inputs) > inputs:
+                    inputs = iframe_inputs
+                    print(f"    ✅ Found {len(inputs)} inputs in iframe")
+
+                    iframe_buttons = []
+                    try:
+                        for selector in selectors:
+                            try:
+                                for elem in self.driver.find_elements(By.XPATH, selector):
+                                    text = (elem.text or elem.get_attribute('value') or '').replace('\n', ' ').strip()
+                                    aria_label = (elem.get_attribute('aria-label') or '').replace('\n', ' ').strip()
+                                    if text:
+                                        iframe_buttons.append(text)
+                                    elif aria_label:
+                                        iframe_buttons.append(aria_label)
+                            except:
+                                continue
+                    except:
+                        pass
+
+                    if iframe_buttons:
+                        buttons = iframe_buttons
+
+                    textareas = self._detect_textareas()
+
+                self.driver.switch_to.default_content()
+            else:
+                print("    ⚠️  No iframe with form found")
+
+        if not textareas:
+            textareas = self._detect_textareas()
+
+        inputs.extend(textareas)
+
+        seen = set()
+        buttons = [x for x in buttons if not (x in seen or seen.add(x))]
+
         file_inputs = []
         try:
             for elem in self.driver.find_elements(By.XPATH, "//input[@type='file']"):
                 file_inputs.append('File upload')
         except:
             pass
-        
+
         visible_text = ""
         try:
-            visible_text = self.driver.find_element(By.TAG_NAME, "body").text[:2000]
+            visible_text = self.driver.find_element(By.TAG_NAME, "body").text[:3000]
         except:
             pass
-        
-        # v3.1: Include DOM hash
+
         dom_hash = self._compute_dom_hash()
-        
+        page_type = self._detect_page_type(url, title, visible_text, buttons)
+
         return PageContext(
-            url=url, title=title, buttons=buttons, inputs=inputs,
-            file_inputs=file_inputs, textareas=[], select_boxes=[],
-            visible_text=visible_text, dom_hash=dom_hash
+            url=url,
+            title=title,
+            buttons=buttons,
+            inputs=inputs,
+            file_inputs=file_inputs,
+            textareas=textareas,
+            select_boxes=[],
+            visible_text=visible_text,
+            dom_hash=dom_hash,
+            page_type=page_type
         )
-    
+
+    def _detect_page_type(self, url: str, title: str, visible_text: str, buttons: List[str]) -> str:
+        """Detect page type - corrected logic for job portals vs applications."""
+        text_lower = visible_text.lower()
+        url_lower = url.lower()
+        buttons_lower = [b.lower() for b in buttons]
+
+        has_form_fields = any(x in text_lower for x in [
+            'vorname', 'nachname', 'e-mail', 'email', 'telefon',
+            'phone', 'mobil', 'adresse', 'anschreiben', 'lebenslauf'
+        ])
+
+        has_apply_button = any(x in buttons_lower for x in [
+            'jetzt bewerben', 'online bewerben', 'bewerben', 'apply now',
+            'apply', 'online-bewerbung'
+        ])
+
+        is_job_portal = any(x in text_lower for x in [
+            'jobbörse', 'jobs', 'stellenangebote', 'careers',
+            'job search', 'job overview', 'stellenanzeigen'
+        ]) or 'jobs-overview' in url_lower
+
+        if has_form_fields:
+            return "JOB_APPLICATION_FORM"
+
+        if has_apply_button and not has_form_fields:
+            return "JOB_APPLICATION_PAGE"
+
+        if is_job_portal and not has_apply_button and not has_form_fields:
+            return "JOB_PORTAL_LISTING"
+
+        return "UNKNOWN"
+
     def execute_action(self, action: Action) -> Tuple[bool, str]:
         """v3.1: Execute with metrics collection."""
-        import time
-        
         metric = ActionMetrics(
             action=action.raw,
             start_time=time.time(),
             dom_hash_before=self._compute_dom_hash()
         )
-        
+
         method_name, kwargs = action.to_executor_call()
-        
+
         if not method_name:
             metric.end_time = time.time()
             metric.success = False
             metric.error = f"Unknown action type: {action.type}"
             self.metrics.append(metric)
             return False, metric.error
-        
+
         method = getattr(self, method_name, None)
         if not method:
             metric.end_time = time.time()
@@ -334,23 +998,21 @@ class BrowserExecutor:
             metric.error = f"Method not implemented: {method_name}"
             self.metrics.append(metric)
             return False, metric.error
-        
+
         try:
-            # v3.1: Add confidence threshold for fuzzy matching
             if action.type in ['CLICK', 'FILL']:
                 kwargs['threshold'] = 0.6 if action.type == 'CLICK' else 0.7
-            
+
             success = method(**kwargs)
             metric.end_time = time.time()
             metric.success = success
             metric.dom_hash_after = self._compute_dom_hash()
             self.metrics.append(metric)
-            
+
             if success:
                 return True, f"Executed in {metric.latency:.2f}s"
-            else:
-                return False, "Execution returned False"
-                
+            return False, "Execution returned False"
+
         except Exception as e:
             metric.end_time = time.time()
             metric.success = False
@@ -358,16 +1020,16 @@ class BrowserExecutor:
             metric.dom_hash_after = self._compute_dom_hash()
             self.metrics.append(metric)
             return False, f"Exception: {str(e)}"
-    
+
     def get_metrics_report(self) -> Dict:
         """v3.1: Generate observability report."""
         if not self.metrics:
             return {}
-        
+
         total = len(self.metrics)
         successful = sum(1 for m in self.metrics if m.success)
         avg_latency = sum(m.latency for m in self.metrics) / total
-        
+
         return {
             'total_actions': total,
             'successful': successful,
@@ -385,7 +1047,7 @@ class BrowserExecutor:
                 for m in self.metrics
             ]
         }
-    
+
     def _log_action(self, action: str, target: str, success: bool, error: Optional[str] = None):
         self.action_log.append({
             "action": action,
@@ -393,9 +1055,9 @@ class BrowserExecutor:
             "success": success,
             "error": error
         })
-    
+
     def close(self):
         self.driver.quit()
-    
+
     def get_log(self) -> List[Dict]:
         return self.action_log

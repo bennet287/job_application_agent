@@ -1,10 +1,7 @@
 import click
-import json
 import re
 import pyperclip
 from datetime import datetime
-from pathlib import Path
-from selenium.webdriver.common.by import By
 
 from config import settings
 from core.jd_processor import JDProcessor
@@ -17,6 +14,11 @@ from database.manager import DatabaseManager
 from core.fatigue_monitor import FatigueMonitor
 from core.decision_rationale import DecisionRationale
 from core.hybrid_browser_automation import run_hybrid_automation
+
+
+# Initialize database
+Session = init_db(str(settings.DB_PATH))
+db = DatabaseManager(Session)
 
 
 @click.group()
@@ -73,43 +75,121 @@ def extract_cv_facts(cv_text: str) -> dict:
         'locations': []
     }
 
-    # Name extraction - IMPROVED with better patterns
+    # -------- ROBUST NAME EXTRACTION (v3.2.2) --------
     lines = cv_text.split('\n')
-    
-    # Try first 15 lines for name (increased from 10)
-    first_lines = '\n'.join(lines[:15])
-    
-    # Pattern 1: Standard capitalized name at start of line
-    # Pattern 2: All caps name
-    # Pattern 3: Name: label
-    # Pattern 4: Name in header format (larger text often at top)
-    name_patterns = [
-        r'^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,3})\s*$',  # Bennet Allryn B
-        r'^([A-Z][A-Z\s]+[A-Z])\s*$',  # BENNET ALLRYN B
-        r'Name[:\s]+([^\n]+)',  # Name: Bennet Allryn B
-        r'^([A-Z][a-z]+\s+[A-Z][a-z]+)\s*\n',  # First Last at very start
-    ]
-    
-    for pattern in name_patterns:
-        match = re.search(pattern, first_lines, re.MULTILINE)
-        if match:
-            name = match.group(1).strip()
-            # Validate: reasonable length, not just a single word, not a common word
-            if 3 < len(name) < 50 and ' ' in name and name.lower() not in ['curriculum vitae', 'resume', 'cv']:
-                facts['name'] = name.title() if name.isupper() else name
+    first_lines = '\n'.join(lines[:10])
+
+    print("    🔍 DEBUG: First 10 lines of CV:")
+    for i, line in enumerate(lines[:10]):
+        print(f"       Line {i}: {line[:80]}")
+
+    # --- Stage 1: Look for a line that starts with capitalized words, then a comma ---
+    name = None
+    for line in lines[:10]:
+        line_strip = line.strip()
+        if not line_strip:
+            continue
+        # Candidate: starts with capital, contains at least one space, contains a comma after the name
+        if re.match(r'^[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)+', line_strip):
+            # Extract everything before the first comma
+            parts = line_strip.split(',')
+            candidate = parts[0].strip()
+            # Validate: length, no email/phone/http
+            if (3 < len(candidate) < 60 and 
+                '@' not in candidate and 
+                not candidate.startswith('+') and 
+                'http' not in candidate.lower() and
+                candidate.lower() not in ['curriculum vitae', 'resume', 'cv']):
+                name = candidate
+                print(f"    ✅ Name extracted (stage1): '{name}'")
                 break
 
-    # If still no name, try line 1 or 2 directly (common CV format)
-    if not facts['name']:
-        for i in range(min(3, len(lines))):
-            line = lines[i].strip()
-            # Skip empty lines and common headers
-            if line and line.lower() not in ['curriculum vitae', 'resume', 'cv', 'personal information']:
-                # Check if it looks like a name (2-3 words, capitalized)
-                words = line.split()
-                if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words if w):
-                    facts['name'] = line
-                    break
+    # --- Stage 2: Look for "Name:" label ---
+    if not name:
+        match = re.search(r'Name[:\s]+([^\n]+)', cv_text, re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip()
+            if 3 < len(candidate) < 60:
+                name = candidate
+                print(f"    ✅ Name extracted (stage2): '{name}'")
+
+    # --- Stage 3: Fallback – first non-empty, non-header line with ≥2 words ---
+    if not name:
+        for line in lines[:5]:
+            line = line.strip()
+            if (line and 
+                len(line.split()) >= 2 and 
+                '@' not in line and 
+                not line.startswith('+') and 
+                'http' not in line.lower() and
+                line.lower() not in ['curriculum vitae', 'resume', 'cv']):
+                # Strip trailing commas, degrees
+                name = re.sub(r',.*$', '', line).strip()
+                print(f"    ✅ Name extracted (stage3): '{name}'")
+                break
+
+    if name:
+        facts['name'] = name
+        # Split name into first/last for form filling
+        parts = name.split()
+        if len(parts) >= 2:
+            facts['first_name'] = parts[0]
+            facts['last_name'] = ' '.join(parts[1:])
+        elif len(parts) == 1:
+            facts['first_name'] = parts[0]
+            facts['last_name'] = ''
+    else:
+        print("    ⚠️  Could not auto-detect name – will prompt later.")
+    # -------------------------------------------------
+
+    # ----- STRUCTURED ADDRESS EXTRACTION -----
+    for line in lines[:20]:
+        line = line.strip()
+        # Look for a line containing a postcode (4-5 digits) and a city
+        if re.search(r'\b\d{4,5}\b', line) and re.search(r'\b[A-Z][a-z]+\b', line):
+            # Found address line: e.g. "9020 Klagenfurt am Wörthersee, Austria."
+            facts['address_raw'] = line
+            print(f"    ✅ Address extracted: '{line}'")
+            
+            # Parse components
+            parts = line.split(',')
+            if len(parts) >= 2:
+                facts['country'] = parts[-1].strip().rstrip('.')
+                address_part = parts[0].strip()
+                
+                # Extract postcode and city
+                pc_match = re.match(r'^(\d{4,5})\s+(.*)', address_part)
+                if pc_match:
+                    facts['postcode'] = pc_match.group(1)
+                    facts['city'] = pc_match.group(2)
+                    facts['address_line1'] = address_part  # "9020 Klagenfurt am Wörthersee"
+                    print(f"       └─ Postcode: {facts['postcode']}, City: {facts['city']}, Country: {facts['country']}")
+            break
+    # ------------------------------------------
+
+    # ----- SOCIAL PROFILES (LinkedIn, GitHub, Website) -----
+    for line in lines[:30]:
+        line_lower = line.lower()
+        if 'linkedin.com/in/' in line_lower:
+            # Extract the URL
+            match = re.search(r'(https?://)?(?:www\.)?linkedin\.com/in/[^\s]+', line, re.IGNORECASE)
+            if match:
+                facts['linkedin'] = match.group(0)
+                print(f"    ✅ LinkedIn: {facts['linkedin'][:50]}...")
+        
+        if 'github.com/' in line_lower:
+            match = re.search(r'(https?://)?(?:www\.)?github\.com/[^\s]+', line, re.IGNORECASE)
+            if match:
+                facts['github'] = match.group(0)
+                print(f"    ✅ GitHub: {facts['github'][:50]}...")
+        
+        # Website/portfolio (look for http/https URLs that aren't LinkedIn/GitHub)
+        if re.search(r'https?://(?!.*(?:linkedin|github))', line_lower):
+            match = re.search(r'https?://[^\s]+', line)
+            if match and 'website' not in facts:
+                facts['website'] = match.group(0)
+                print(f"    ✅ Website: {facts['website'][:50]}...")
+    # -------------------------------------------------------
 
     # Email - IMPROVED pattern
     email_match = re.search(
@@ -433,14 +513,33 @@ def process(input_data, force_effort):
             click.echo(f"  - {v}")
         click.echo("Please edit to fix these issues.")
 
-    # Optional user edit
-    if click.confirm("Edit this cover letter?"):
-        cover_letter = click.prompt(
-            "Enter corrected cover letter", 
-            type=str, 
-            default=cover_letter
-        )
+    # ========== COVER LETTER EDIT & VALIDATION LOOP ==========
+    from core.cover_letter_validator import CoverLetterValidator
+    cl_validator = CoverLetterValidator()
+    
+    while True:
+        if click.confirm("Edit this cover letter?"):
+            cover_letter = click.prompt(
+                "Enter corrected cover letter", 
+                type=str, 
+                default=cover_letter
+            )
 
+        # Validate against CV facts
+        violations = cl_validator.validate_against_cv(cover_letter, cv_facts)
+
+        if violations:
+            click.echo("\n⚠️  The cover letter contains claims NOT supported by your CV:")
+            for v in violations:
+                click.echo(f"  • {v}")
+            if not click.confirm("\nProceed anyway? (not recommended)"):
+                if click.confirm("Edit again?"):
+                    continue
+                else:
+                    click.echo("Application cancelled.")
+                    return
+        break  # exit loop when no violations or user forces proceed
+    
     # Display final with clear marking
     click.echo(f"\n{'='*70}")
     click.echo("FINAL COVER LETTER (VERIFY BEFORE USE)")
@@ -453,6 +552,7 @@ def process(input_data, force_effort):
     if not click.confirm("\nIs this cover letter accurate and ready to use?"):
         click.echo("Application cancelled by user.")
         return
+
 
     # =====================================================================
     # STEP 7: LOG APPLICATION (BEFORE AUTOMATION)
@@ -473,7 +573,7 @@ def process(input_data, force_effort):
         'cv_file_path': cv_result['pdf'],
         'cover_letter_constraint_type': 'none',
         'cover_letter_length': len(cover_letter),
-        'llm_model': settings.LLM_MODEL,
+        'llm_model': settings.LLM_TEXT_MODEL,  # <-- FIXED
         'date_processed': datetime.now(),
         'process_latency_seconds': int((datetime.now() - start_time).total_seconds())
     })
@@ -483,6 +583,29 @@ def process(input_data, force_effort):
     rationale_mgr.create(app_id, slugify(company_name), result['score'], result['analysis'], jd)
 
     click.echo(f"✓ Application {app_id} logged successfully.")
+
+    # ----- SAVE COVER LETTER TO FILE (no external dependency) -----
+    import os
+    from pathlib import Path
+    
+    # Get values safely
+    company_slug = slugify(jd.get('company_name', 'unknown'))
+    cover_letter_dir = settings.ASSETS_DIR / 'cover_letters'
+    cover_letter_dir.mkdir(parents=True, exist_ok=True)
+    
+    cover_letter_filename = f"cl_{company_slug}_{app_id:04d}.txt"
+    cover_letter_path = cover_letter_dir / cover_letter_filename
+    
+    # Write file with secure permissions (owner read/write only)
+    with open(cover_letter_path, 'w', encoding='utf-8') as f:
+        f.write(cover_letter)
+    os.chmod(cover_letter_path, 0o600)
+    
+    # Add to cv_facts for automation
+    cv_facts['cover_letter_path'] = str(cover_letter_path)
+    
+    click.echo(f"  📄 Cover letter saved: {cover_letter_filename}")
+    # ---------------------------------------
 
     # =====================================================================
     # STEP 8: BROWSER AUTOMATION (AI-Powered or Assist)
@@ -497,18 +620,66 @@ def process(input_data, force_effort):
     cv_facts.setdefault('email', '')
     cv_facts.setdefault('phone', '')
 
-    name_parts = (cv_facts.get('name') or '').split()
+    # Improved name parsing with heuristics
+    raw_name = cv_facts.get('name', '').strip()
+    name_parts = raw_name.split()
+    
+    # Fallback: Prompt if name incomplete
+    if len(name_parts) < 2:
+        full_name = click.prompt(
+            "Please enter your full name for form auto-fill",
+            type=str,
+            default=raw_name
+        ).strip()
+        name_parts = full_name.split()
+    
+    # Smart split: handle middle names, last names with spaces
+    if len(name_parts) == 2:
+        first_name, last_name = name_parts[0], name_parts[1]
+    elif len(name_parts) > 2:
+        # Assume: First + (Middle...) + Last
+        # If last 2 words are capitalized, likely last name (e.g., "Van Der Waals")
+        if name_parts[-2][0].isupper() and len(name_parts[-2]) <= 3:
+            first_name = name_parts[0]
+            last_name = ' '.join(name_parts[1:])
+        else:
+            first_name = name_parts[0]
+            last_name = ' '.join(name_parts[1:])  # Keep all as last name
+    else:
+        first_name = name_parts[0] if name_parts else ''
+        last_name = ''
+    
     user_data = {
-        'first_name': name_parts[0] if name_parts else '',
-        'last_name': ' '.join(name_parts[1:]) if len(name_parts) > 1 else '',
+        'first_name': first_name,
+        'last_name': last_name,
         'email': cv_facts.get('email', ''),
         'phone': cv_facts.get('phone', ''),
+        'address_raw': cv_facts.get('address_raw', ''),
+        'address_line1': cv_facts.get('address_line1', ''),
+        'city': cv_facts.get('city', ''),
+        'postcode': cv_facts.get('postcode', ''),
+        'country': cv_facts.get('country', ''),
+        'linkedin': cv_facts.get('linkedin', ''),
+        'github': cv_facts.get('github', ''),
+        'website': cv_facts.get('website', ''),
+        'cover_letter_path': cv_facts.get('cover_letter_path', ''),
     }
 
     click.echo(f"\nAuto-fill data from CV:")
     click.echo(f"  Name: {user_data['first_name']} {user_data['last_name']}")
     click.echo(f"  Email: {user_data['email'] or 'Not found'}")
     click.echo(f"  Phone: {user_data['phone'] or 'Not found'}")
+    if user_data.get('address_line1'):
+        click.echo(f"  Address: {user_data['address_line1']}")
+        click.echo(f"  City: {user_data.get('city', 'N/A')}")
+        click.echo(f"  Postcode: {user_data.get('postcode', 'N/A')}")
+        click.echo(f"  Country: {user_data.get('country', 'N/A')}")
+    if user_data.get('linkedin'):
+        click.echo(f"  LinkedIn: {user_data['linkedin'][:50]}...")
+    if user_data.get('github'):
+        click.echo(f"  GitHub: {user_data['github'][:50]}...")
+    if user_data.get('cover_letter_path'):
+        click.echo(f"  Cover Letter: {user_data['cover_letter_path']}")
 
     url = jd.get('source_url', '')
     if not url:
@@ -534,34 +705,20 @@ def process(input_data, force_effort):
         try:
             click.echo("\n  🤖 Starting Hybrid Browser Automation...")
             click.echo(f"  🧠 Planner: Context-aware | Executor: Selenium")
-            
-            # Check if run_hybrid_automation accepts session/application_id
-            # If not, call without those parameters
-            try:
-                automation_result = run_hybrid_automation(
-                    url=url,
-                    user_data=user_data,
-                    cover_letter=cover_letter,
-                    cv_path=cv_result['pdf'],
-                    session=db.session,
-                    application_id=app_id
-                )
-            except TypeError:
-                # Function doesn't accept session/application_id yet
-                automation_result = run_hybrid_automation(
-                    url=url,
-                    user_data=user_data,
-                    cover_letter=cover_letter,
-                    cv_path=cv_result['pdf']
-                )
+            automation_result = run_hybrid_automation(
+                url=url,
+                user_data=user_data,
+                cover_letter=cover_letter,
+                cv_path=cv_result['pdf']
+            )
 
-            if automation_result.success:
-                click.echo("\n  ✅ Automation completed")
+            if len(automation_result.actions_taken) > 0:
+                click.echo(f"\n  ✅ Automation completed {len(automation_result.actions_taken)} actions")
                 click.echo(f"  🔢 Actions: {len(automation_result.actions_taken)}")
                 if automation_result.screenshot_path:
                     click.echo(f"  📸 Screenshot: {automation_result.screenshot_path}")
             else:
-                click.echo("\n  ⚠️  Automation incomplete")
+                click.echo("\n  ⚠️  Automation incomplete, switching to assist mode")
                 auto_level = 'assist'
 
         except Exception as e:

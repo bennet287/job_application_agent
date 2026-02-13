@@ -2,6 +2,7 @@ import json
 import hashlib
 import re
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -151,19 +152,27 @@ class SurgicalCVEditor:
         return new_bullets
 
     def _save_tailored(self, bullets: list, company: str, role: str) -> Path:
-        """Save tailored CV to file."""
+        """Save tailored CV with a SHORT filename (<40 chars) to avoid ATS rejection."""
         doc = Document()
         doc.add_heading(f'{role} - {company}', 0)
 
         for bullet in bullets:
             doc.add_paragraph(bullet, style='List Bullet')
 
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        safe_company = re.sub(r'[^\w]', '_', company)[:20]
-        safe_role = re.sub(r'[^\w]', '_', role)[:20]
-        filename = f'{safe_company}_{safe_role}_{timestamp}.docx'
+        # Create a short, unique ID (8 chars: timestamp + random)
+        import random
+        short_id = f"{int(time.time())}{random.randint(100,999)}"[-8:]
+        
+        # Slugify but TRUNCATE to keep total under 40 chars
+        safe_company = re.sub(r'[^\w]', '', company)[:12]  # max 12 chars
+        safe_role = re.sub(r'[^\w]', '', role)[:8]         # max 8 chars
+        
+        # Final: cv_{company}_{role}_{id}.docx = ~35 chars max
+        filename = f'cv_{safe_company}_{safe_role}_{short_id}.docx'
         output_path = self.output_dir / filename
         doc.save(output_path)
+        
+        print(f"    📄 Saved: {filename} ({len(filename)} chars)")
         return output_path
 
     def _compute_hash(self, filepath: str) -> str:
@@ -196,43 +205,79 @@ CURRENT CV BULLETS:
 {json.dumps(current_bullets[:5], indent=2)}
 
 TAILORING INSTRUCTIONS:
-1. Identify which bullets can be improved to match job keywords
-2. Suggest MAX {max_changes} rewrites
-3. ONLY rephrase existing content - never invent new experience
-4. Incorporate job keywords naturally
-5. Preserve all numbers and metrics exactly
+1. You MUST suggest at least ONE rewrite. It is not allowed to return an empty array.
+2. MAX {max_changes} rewrites.
+3. ONLY rephrase existing content – never invent new experience.
+4. Preserve all numbers and metrics exactly.
+5. Incorporate job keywords naturally.
+6. If the CV already matches well, still suggest 1-2 minor improvements:
+   - Reorder bullet points to put most relevant first
+   - Use stronger action verbs (e.g., "orchestrated", "engineered", "optimized")
+   - Highlight keywords from the job requirements
+   - Combine two related bullets into one stronger statement
 
-Return JSON array of changes:
+Return a JSON array of changes – AT LEAST ONE ELEMENT.
+If you truly cannot make any improvement, return a single change that rephrases the first bullet slightly.
 [
   {{
     "bullet_index": 0,
     "original": "original text",
-    "new": "improved text with job keywords",
-    "reason": "why this improves match"
+    "new": "improved text",
+    "reason": "why this improves the match"
   }}
-]
-
-If no changes needed, return empty array []."""
+]"""
 
         try:
+            # ---------- LLM CALL ----------
             response = self.llm.generate(prompt)
+            # ---------- END LLM CALL ----------
 
-            json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
-            if json_match:
-                changes = json.loads(json_match.group(1))
-            else:
-                try:
+            # --- Parse LLM response ---
+            changes = []
+            try:
+                # Try to extract JSON
+                json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
+                if json_match:
+                    changes = json.loads(json_match.group(1))
+                else:
+                    # Try to parse whole response as JSON
                     changes = json.loads(response)
-                except:
-                    changes = []
+            except Exception as e:
+                print(f"    ⚠️  Failed to parse LLM response: {e}")
 
+            # --- Validate and filter ---
             valid_changes = []
             for change in changes:
                 if self._validate_change(change, current_bullets):
                     valid_changes.append(change)
 
+            # --- HARD FALLBACK: if no changes, create one ourselves ---
+            if not valid_changes and current_bullets:
+                print("    ⚠️  LLM suggested no changes – forcing a minor rewrite.")
+                # Take the first bullet and rephrase it slightly
+                first_idx = 0
+                original = current_bullets[first_idx]
+                # Simple rephrase: add a strong action verb if missing
+                if not any(verb in original.lower() for verb in ['led', 'managed', 'developed', 'engineered', 'optimized']):
+                    new = "Led " + original[0].lower() + original[1:]
+                else:
+                    # Otherwise just add "Successfully" at the front
+                    new = "Successfully " + original[0].lower() + original[1:]
+                
+                # Create a fallback change
+                fallback_change = {
+                    "bullet_index": first_idx,
+                    "original": original,
+                    "new": new,
+                    "reason": "Minor rephrase to ensure CV optimization"
+                }
+                if self._validate_change(fallback_change, current_bullets):
+                    valid_changes.append(fallback_change)
+                    print(f"    ✅ Created fallback change: {original[:40]}... → {new[:40]}...")
+
+            # --- Apply changes ---
             if not valid_changes:
-                print("No CV changes suggested - current CV is suitable")
+                print("No CV changes suggested – current CV is suitable")
                 return {
                     'pdf': str(self.master_path),
                     'changes': [],

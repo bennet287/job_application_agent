@@ -1,5 +1,3 @@
-
-
 # JOB APPLICATION AGENT - FINAL IMPLEMENTATION v3.1
 
 ## Production-Grade Cognitive-Execution System
