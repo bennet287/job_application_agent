@@ -190,6 +190,70 @@ def extract_cv_facts(cv_text: str) -> dict:
                 print(f"    ✅ Website: {facts['website'][:50]}...")
     # -------------------------------------------------------
 
+    # ----- INDUSTRY EXTRACTION (from CV work experience) -----
+    industry_keywords = {
+        'network': 'Telecommunications',
+        'telecom': 'Telecommunications',
+        'wireless': 'Telecommunications',
+        'router': 'Telecommunications',
+        'switch': 'Telecommunications',
+        'security': 'Cybersecurity',
+        'cyber': 'Cybersecurity',
+        'firewall': 'Cybersecurity',
+        'infrastructure': 'IT Infrastructure',
+        'cloud': 'Cloud Computing',
+        'aws': 'Cloud Computing',
+        'azure': 'Cloud Computing',
+        'software': 'Software Development',
+        'java': 'Software Development',
+        'python': 'Software Development',
+        'development': 'Software Development',
+        'programming': 'Software Development',
+        'railway': 'Transportation',
+        'rail': 'Transportation',
+        'logistics': 'Transportation',
+        'supply chain': 'Transportation',
+        'consulting': 'IT Consulting',
+        'client': 'IT Services',
+        'service': 'IT Services',
+        'enterprise': 'IT Services',
+        'education': 'Education',
+        'teaching': 'Education',
+        'lecturer': 'Education',
+        'university': 'Education',
+        'automation': 'Automation',
+        'devops': 'DevOps',
+        'ci/cd': 'DevOps',
+        'kubernetes': 'DevOps',
+        'docker': 'DevOps',
+    }
+
+    industries_found = set()
+    experience_section = False
+    for line in lines:
+        line_lower = line.lower()
+        if any(header in line_lower for header in ['experience', 'work history', 'professional background', 'employment']):
+            experience_section = True
+            continue
+        if experience_section and line.strip() == '':
+            experience_section = False
+            continue
+        if experience_section:
+            for keyword, industry in industry_keywords.items():
+                if keyword in line_lower:
+                    industries_found.add(industry)
+
+    # Also check whole CV for keywords (fallback)
+    cv_lower = cv_text.lower()
+    for keyword, industry in industry_keywords.items():
+        if keyword in cv_lower:
+            industries_found.add(industry)
+
+    facts['industries'] = ', '.join(sorted(industries_found)) if industries_found else 'IT Services'
+    if industries_found:
+        print(f"    ✅ Industries extracted: {facts['industries']}")
+    # -------------------------------------------------------
+
     # Email - IMPROVED pattern
     email_match = re.search(
         r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', 
@@ -360,6 +424,15 @@ def process(input_data, force_effort):
         click.echo(f"  • Degrees: {', '.join(cv_facts['degrees'])}")
     if cv_facts.get('key_achievements'):
         click.echo(f"  • Key achievements: {len(cv_facts['key_achievements'])} with metrics")
+
+    # ----- ADD SITE-SPECIFIC DEFAULTS (for complex forms like Beyond Now) -----
+    cv_facts.setdefault('relocation', 'Yes, I would like to relocate.')
+    cv_facts.setdefault('portfolio', cv_facts.get('github', cv_facts.get('website', '')))
+    cv_facts.setdefault('travel_willingness', '100%')
+    cv_facts.setdefault('source', 'Direct contact')
+    if 'industries' not in cv_facts and cv_facts.get('years_experience'):
+        cv_facts['industries'] = 'Information Technology, Software Development'
+    # -----------------------------------------------------------------------
 
     # =====================================================================
     # STEP 2: PARSE JOB DESCRIPTION
@@ -648,6 +721,42 @@ def process(input_data, force_effort):
         first_name = name_parts[0] if name_parts else ''
         last_name = ''
     
+    # Salary expectation (numeric-aware)
+    salary_value = None
+    salary_is_numeric = False
+
+    salary_range = jd.get('salary_range') or jd.get('salary')
+    if salary_range:
+        numbers = re.findall(r'[\d\.,]+', str(salary_range))
+        if numbers:
+            num_str = numbers[0].replace('.', '').replace(',', '')
+            try:
+                salary_value = int(num_str)
+                salary_is_numeric = True
+                click.echo(f"  💰 Using salary from job description: {salary_value}")
+            except Exception:
+                pass
+
+    if not salary_value:
+        click.echo("\nNo salary found in job description.")
+        if click.confirm("Do you want to enter a salary expectation?"):
+            resp = click.prompt("Enter amount (e.g., 60000) or 'negotiable'", default="negotiable")
+            resp_clean = resp.strip()
+            if resp_clean.lower() == 'negotiable':
+                salary_value = 'negotiable'
+                salary_is_numeric = False
+            else:
+                try:
+                    salary_value = int(resp_clean.replace('.', '').replace(',', ''))
+                    salary_is_numeric = True
+                except Exception:
+                    salary_value = resp_clean
+                    salary_is_numeric = False
+        else:
+            salary_value = 'negotiable'
+            salary_is_numeric = False
+            click.echo("  ℹ️ Using default: 'negotiable'")
+
     user_data = {
         'first_name': first_name,
         'last_name': last_name,
@@ -662,6 +771,13 @@ def process(input_data, force_effort):
         'github': cv_facts.get('github', ''),
         'website': cv_facts.get('website', ''),
         'cover_letter_path': cv_facts.get('cover_letter_path', ''),
+        'salary_expectation': salary_value,
+        'salary_is_numeric': salary_is_numeric,
+        'industries': cv_facts.get('industries', ''),
+        'relocation': cv_facts.get('relocation', ''),
+        'portfolio': cv_facts.get('portfolio', ''),
+        'travel_willingness': cv_facts.get('travel_willingness', ''),
+        'source': cv_facts.get('source', ''),
     }
 
     click.echo(f"\nAuto-fill data from CV:")

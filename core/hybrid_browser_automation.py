@@ -246,7 +246,7 @@ class HybridBrowserAutomation:
             if len(context.inputs) > 0:
                 # ===== DYNAMIC BUDGET ADJUSTMENT =====
                 if len(context.inputs) > 10:
-                    self.planner.step_budget = max(20, self.planner.step_budget)
+                    self.planner.step_budget = max(25, self.planner.step_budget)
                     print(f"     📊 Large form detected – step budget increased to {self.planner.step_budget}")
                 elif len(context.inputs) > 5:
                     self.planner.step_budget = max(15, self.planner.step_budget)
@@ -309,24 +309,38 @@ class HybridBrowserAutomation:
             else:
                 print(f"  ⚠️  No input fields detected on form")
         
+        # Capture filled form before any verification/submit changes the page
+        if clicked_apply and len(result.actions_taken) > 0:
+            print("\n  📸 Capturing filled form...")
+            company_slug = self._extract_company_slug(self.executor.driver.current_url)
+            if application_id:
+                pre_submit_screenshot = f"pre_submit_{application_id}_{company_slug}_{int(time.time())}.png"
+            else:
+                pre_submit_screenshot = f"pre_submit_{company_slug}_{int(time.time())}.png"
+
+            screenshot_path = Path("assets") / "screenshots" / pre_submit_screenshot
+            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+            if self.executor.screenshot(str(screenshot_path)):
+                print(f"  ✅ Filled form screenshot saved: {pre_submit_screenshot}")
+
         result.final_url = self.executor.driver.current_url
         result.success = len(result.actions_taken) >= 2
         
         # ========== FINAL VERIFICATION ==========
         if clicked_apply and len(result.actions_taken) > 0:
             print("\n  🔍 Final verification: checking critical fields...")
-            
+
             # Re-extract context to get current state
             from selenium.webdriver.common.by import By
             final_context = self.executor.extract_page_context()
-            
+
             # Find country dropdown in final_context
             country_field = None
             for inp in final_context.inputs:
                 if inp.get('label') == 'Country' and inp.get('type') == 'select':
                     country_field = inp
                     break
-            
+
             if country_field:
                 try:
                     # Find the actual select element (use the same robust strategy as select_dropdown)
@@ -341,24 +355,20 @@ class HybridBrowserAutomation:
                         parent = label_elem.find_element(By.XPATH, "..")
                         try:
                             select_elem = parent.find_element(By.TAG_NAME, "select")
-                        except:
+                        except Exception:
                             # Try following sibling
                             select_elem = label_elem.find_element(By.XPATH, "./following-sibling::select[1]")
-                    
+
                     if select_elem:
                         # Get currently selected option text
                         selected = self.executor.driver.execute_script(
                             "return arguments[0].options[arguments[0].selectedIndex].text;",
                             select_elem
                         )
-                        expected_country = user_data.get('country', 'Austria')
-                        
-                        if selected != expected_country:
+                        if selected != 'Austria':
                             print(f"  ⚠️  Country dropdown reset to '{selected}' – re-selecting...")
                             # Re-run the select action
-                            self.executor.select_dropdown('Country', expected_country)
-                            time.sleep(1)
-                            print(f"  ✅ Country re-verified")
+                            self.executor.select_dropdown('Country', 'Austria')
                         else:
                             print(f"  ✅ Country dropdown correctly set to '{selected}'")
                     else:
@@ -367,21 +377,222 @@ class HybridBrowserAutomation:
                     print(f"  ⚠️  Country verification failed: {e}")
             else:
                 print("  ℹ️  No country dropdown found")
+
+            # Re-fill critical fields if they were cleared by validation
+            def _refill_if_empty(field_label: str, field_value: Optional[str]):
+                if not field_value:
+                    return
+                try:
+                    search_label = field_label.replace('*', '').strip()
+                    label_elem = None
+
+                    try:
+                        label_elem = self.executor.driver.find_element(
+                            By.XPATH,
+                            f"//label[contains(normalize-space(text()), '{search_label}') ]"
+                        )
+                    except Exception:
+                        pass
+
+                    if not label_elem:
+                        try:
+                            label_elem = self.executor.driver.find_element(
+                                By.XPATH, f"//label[text()='{field_label}']"
+                            )
+                        except Exception:
+                            pass
+
+                    input_field = None
+                    if label_elem:
+                        try:
+                            input_field = label_elem.find_element(By.XPATH, ".//input")
+                        except Exception:
+                            pass
+
+                        if not input_field:
+                            try:
+                                input_field = label_elem.find_element(By.XPATH, "./following-sibling::input[1]")
+                            except Exception:
+                                pass
+
+                        if not input_field:
+                            try:
+                                input_field = label_elem.find_element(
+                                    By.XPATH, "./parent::*/following-sibling::*[1]//input"
+                                )
+                            except Exception:
+                                pass
+
+                    if not input_field:
+                        try:
+                            input_field = self.executor.driver.find_element(
+                                By.XPATH,
+                                f"//label[contains(normalize-space(text()), '{search_label}')]/following::input[1]"
+                            )
+                        except Exception:
+                            pass
+
+                    if not input_field:
+                        return
+
+                    current_value = input_field.get_attribute("value") or ""
+                    if not current_value.strip():
+                        print(f"  ⚠️  {field_label} empty – re-filling...")
+                        self.executor.fill_input(field_label, field_value)
+                except Exception as e:
+                    print(f"  ⚠️  {field_label} re-fill check failed: {e}")
+
+            _refill_if_empty('First Name*', user_data.get('first_name'))
+            _refill_if_empty('Last Name*', user_data.get('last_name'))
+            _refill_if_empty('E-mail*', user_data.get('email'))
         # ========================================
+
+        # ========== PRE-SUBMIT VALIDATION ==========
+        can_submit = True
+        if clicked_apply and len(result.actions_taken) > 0:
+            print("\n  🔍 Pre-submit validation: checking required fields...")
+            try:
+                all_inputs = self.executor.driver.find_elements(
+                    By.XPATH, "//input[@type!='hidden'] | //select | //textarea"
+                )
+                for inp in all_inputs:
+                    if not inp.is_displayed():
+                        continue
+
+                    label_text = ''
+                    try:
+                        input_id = inp.get_attribute('id')
+                        if input_id:
+                            label = self.executor.driver.find_element(
+                                By.XPATH, f"//label[@for='{input_id}']"
+                            )
+                            label_text = (label.text or '').strip()
+                    except Exception:
+                        pass
+
+                    required = inp.get_attribute('required') is not None or ('*' in label_text)
+                    if not required:
+                        combined_text = ''
+                        for attr in ['placeholder', 'name', 'id', 'aria-label']:
+                            attr_val = inp.get_attribute(attr)
+                            if attr_val:
+                                combined_text += f"{attr_val.lower()} "
+                        salary_keywords = ['salary', 'gehalt', 'annual', 'brutto', '€', 'euro', 'compensation']
+                        if any(keyword in combined_text for keyword in salary_keywords):
+                            required = True
+
+                    if required:
+                        value = inp.get_attribute('value') or ''
+                        if not value.strip():
+                            field_name = label_text or (
+                                inp.get_attribute('placeholder')
+                                or inp.get_attribute('name')
+                                or 'field'
+                            )
+                            print(f"    ❌ Required field '{field_name}' is empty.")
+                            can_submit = False
+            except Exception as e:
+                print(f"    ⚠️ Validation check failed: {e}")
+
+            if not can_submit:
+                print("\n  ⚠️ Some required fields are empty – not submitting automatically.")
+                print("  👉 Please fill the missing fields manually and click Submit.")
+            else:
+                print("  ✅ All required fields appear filled.")
+        # ==========================================
         
         # ========== AUTO-SUBMIT (OPTIONAL) ==========
-        if clicked_apply and len(result.actions_taken) > 0:
+        if clicked_apply and len(result.actions_taken) > 0 and can_submit:
             try:
                 print("\n  📤 Looking for submit button...")
+                original_url = self.executor.driver.current_url
+                page_source_before = self.executor.driver.page_source
+
                 # Try common submit button texts
                 submit_texts = ['Submit', 'Send', 'Submit application', 'Apply', 'Bewerben', 'Absenden', 'Senden']
+                submitted = False
                 for text in submit_texts:
                     if self.executor.click_button(text, threshold=0.7):
                         print(f"  ✅ Submit button clicked: '{text}'")
+                        submitted = True
                         time.sleep(2)
                         break
                 else:
                     print("  ⚠️  No submit button found – manual submission may be required")
+
+                if submitted:
+                    print("\n  ⏳ Waiting for submission result...")
+                    time.sleep(3)
+
+                    submission_success = False
+                    for _ in range(10):
+                        time.sleep(1)
+                        current_url = self.executor.driver.current_url
+                        page_source = self.executor.driver.page_source
+
+                        error_elements = self.executor.driver.find_elements(
+                            By.XPATH,
+                            "//*[contains(@class, 'error') or contains(@class, 'validation') or @aria-invalid='true']"
+                        )
+                        if error_elements:
+                            submission_success = False
+                            break
+
+                        if urlparse(current_url).path != urlparse(original_url).path:
+                            submission_success = True
+                            break
+
+                        success_phrases = [
+                            'thank you', 'danke', 'bewerbung eingegangen',
+                            'application received', 'success'
+                        ]
+                        if any(phrase in page_source.lower() for phrase in success_phrases):
+                            submission_success = True
+                            break
+
+                        if 'first name' not in page_source.lower() and 'vorname' not in page_source.lower():
+                            submission_success = True
+                            break
+
+                    if submission_success:
+                        print("  ✅ Submission confirmed – application sent.")
+                    else:
+                        print("  ❌ Submission failed or uncertain – page did not change.")
+                        if error_elements:
+                            print("  ⚠️  Validation errors detected:")
+                            for err in error_elements[:3]:
+                                err_text = err.text or err.get_attribute('innerText') or 'Error'
+                                print(f"     - {err_text[:100]}")
+                        else:
+                            print("  ⚠️  No specific error elements found – manual inspection required.")
+
+                        if page_source_before:
+                            print("\n  🔍 Scanning for empty required fields...")
+                            required_inputs = self.executor.driver.find_elements(
+                                By.XPATH,
+                                "//input[@required] | //select[@required] | //textarea[@required]"
+                            )
+                            for inp in required_inputs:
+                                if not inp.is_displayed():
+                                    continue
+                                if not (inp.get_attribute('value') or '').strip():
+                                    label_text = "Unknown"
+                                    input_id = inp.get_attribute('id')
+                                    if input_id:
+                                        try:
+                                            label = self.executor.driver.find_element(
+                                                By.XPATH, f"//label[@for='{input_id}']"
+                                            )
+                                            label_text = (label.text or '').strip()
+                                        except Exception:
+                                            pass
+                                    if label_text == "Unknown":
+                                        label_text = (
+                                            inp.get_attribute('placeholder')
+                                            or inp.get_attribute('name')
+                                            or 'field'
+                                        )
+                                    print(f"     - {label_text} is empty")
             except Exception as e:
                 print(f"  ⚠️  Submit failed: {e}")
         # ===========================================

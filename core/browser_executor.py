@@ -6,6 +6,7 @@ from multiprocessing import context
 import time
 import hashlib
 from typing import Optional, Dict, List, Tuple
+import re
 from dataclasses import dataclass, field
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -353,6 +354,7 @@ class BrowserExecutor:
             "Verstanden",
             "OK",
             "Ja",
+            "Accept cookies",
             "Accept all cookies",
             "Accept all",
             "I agree",
@@ -418,6 +420,7 @@ class BrowserExecutor:
     def _detect_inputs(self) -> List[Dict]:
         """Detect all input fields with improved label finding for ATS systems - FIXED to detect SELECT elements."""
         inputs = []
+        seen_labels = set()
 
         try:
             labels = self.driver.find_elements(By.TAG_NAME, 'label')
@@ -436,12 +439,18 @@ class BrowserExecutor:
                     try:
                         select_elem = label.find_element(By.XPATH, ".//select")
                         if select_elem:
-                            inputs.append({
-                                'label': label_text,
-                                'type': 'select',
-                                'input_type': 'select',
-                                'required': '*' in label_text or select_elem.get_attribute('required') is not None
-                            })
+                            label_key = label_text.strip()
+                            if label_key not in seen_labels:
+                                inputs.append({
+                                    'label': label_text,
+                                    'type': 'select',
+                                    'input_type': 'select',
+                                    'required': '*' in label_text or select_elem.get_attribute('required') is not None,
+                                    'name': select_elem.get_attribute('name') or '',
+                                    'placeholder': select_elem.get_attribute('placeholder') or '',
+                                    'aria_label': select_elem.get_attribute('aria-label') or '',
+                                })
+                                seen_labels.add(label_key)
                             print(f"       OK: label '{label_text[:30]}' -> SELECT element")
                             continue
                     except:
@@ -453,12 +462,18 @@ class BrowserExecutor:
                         if label_for:
                             select_elem = self.driver.find_element(By.XPATH, f"//select[@id='{label_for}']")
                             if select_elem:
-                                inputs.append({
-                                    'label': label_text,
-                                    'type': 'select',
-                                    'input_type': 'select',
-                                    'required': '*' in label_text or select_elem.get_attribute('required') is not None
-                                })
+                                label_key = label_text.strip()
+                                if label_key not in seen_labels:
+                                    inputs.append({
+                                        'label': label_text,
+                                        'type': 'select',
+                                        'input_type': 'select',
+                                        'required': '*' in label_text or select_elem.get_attribute('required') is not None,
+                                        'name': select_elem.get_attribute('name') or '',
+                                        'placeholder': select_elem.get_attribute('placeholder') or '',
+                                        'aria_label': select_elem.get_attribute('aria-label') or '',
+                                    })
+                                    seen_labels.add(label_key)
                                 print(f"       OK: label '{label_text[:30]}' -> SELECT by @for")
                                 continue
                     except:
@@ -484,12 +499,18 @@ class BrowserExecutor:
 
                     if input_elem:
                         input_type = input_elem.get_attribute('type') or 'text'
-                        inputs.append({
-                            'label': label_text,
-                            'type': input_type,
-                            'input_type': input_type,
-                            'required': '*' in label_text or input_elem.get_attribute('required') is not None
-                        })
+                        label_key = label_text.strip()
+                        if label_key not in seen_labels:
+                            inputs.append({
+                                'label': label_text,
+                                'type': input_type,
+                                'input_type': input_type,
+                                'required': '*' in label_text or input_elem.get_attribute('required') is not None,
+                                'name': input_elem.get_attribute('name') or '',
+                                'placeholder': input_elem.get_attribute('placeholder') or '',
+                                'aria_label': input_elem.get_attribute('aria-label') or '',
+                            })
+                            seen_labels.add(label_key)
                         print(f"       OK: label '{label_text[:30]}' -> input type={input_type}")
                 except:
                     continue
@@ -500,11 +521,17 @@ class BrowserExecutor:
                 for elem in self.driver.find_elements(By.XPATH, xpath):
                     placeholder = elem.get_attribute('placeholder')
                     if placeholder:
-                        inputs.append({
-                            'label': placeholder,
-                            'type': elem.get_attribute('type') or 'text',
-                            'required': elem.get_attribute('required') is not None
-                        })
+                        label_key = placeholder.strip()
+                        if label_key not in seen_labels:
+                            inputs.append({
+                                'label': placeholder,
+                                'type': elem.get_attribute('type') or 'text',
+                                'required': elem.get_attribute('required') is not None,
+                                'name': elem.get_attribute('name') or '',
+                                'placeholder': placeholder,
+                                'aria_label': elem.get_attribute('aria-label') or '',
+                            })
+                            seen_labels.add(label_key)
 
             if len(inputs) < 3:
                 print("    DEBUG: Trying to find inputs by nearby text...")
@@ -516,13 +543,56 @@ class BrowserExecutor:
                     try:
                         prev_text = inp.find_element(By.XPATH, "./preceding-sibling::*[1]").text
                         if prev_text and len(prev_text) < 50:
-                            inputs.append({
-                                'label': prev_text,
-                                'type': inp.get_attribute('type') or 'text',
-                                'required': False
-                            })
+                            label_key = prev_text.strip()
+                            if label_key not in seen_labels:
+                                inputs.append({
+                                    'label': prev_text,
+                                    'type': inp.get_attribute('type') or 'text',
+                                    'required': False,
+                                    'name': inp.get_attribute('name') or '',
+                                    'placeholder': inp.get_attribute('placeholder') or '',
+                                    'aria_label': inp.get_attribute('aria-label') or '',
+                                })
+                                seen_labels.add(label_key)
                     except:
                         pass
+
+            # ----- DETECT UNLABELED INPUTS VIA ATTRIBUTES -----
+            try:
+                attr_xpath = (
+                    "//input[(@placeholder or @name or @aria-label) and "
+                    "(not(@type) or @type='text' or @type='email' or @type='tel' or @type='number')]"
+                )
+                for inp in self.driver.find_elements(By.XPATH, attr_xpath):
+                    if not inp.is_displayed():
+                        continue
+                    placeholder = inp.get_attribute('placeholder') or ''
+                    name_attr = inp.get_attribute('name') or ''
+                    aria_label = inp.get_attribute('aria-label') or ''
+                    label_text = placeholder or name_attr or aria_label or 'unknown'
+                    combined = f"{placeholder} {name_attr} {aria_label}".lower()
+                    salary_keywords = ['salary', 'gehalt', 'annual', 'brutto', '€', 'euro', 'compensation']
+                    is_salary = any(keyword in combined for keyword in salary_keywords)
+                    if label_text == 'unknown' and is_salary:
+                        label_text = 'Annual gross salary'
+                        print(
+                            f"       ✓ Upgraded unlabeled field to synthetic salary label: '{label_text}'"
+                        )
+                    label_key = label_text.strip()
+                    if label_key in seen_labels:
+                        continue
+                    inputs.append({
+                        'label': label_text,
+                        'type': inp.get_attribute('type') or 'text',
+                        'required': inp.get_attribute('required') is not None or is_salary,
+                        'name': name_attr,
+                        'placeholder': placeholder,
+                        'aria_label': aria_label,
+                    })
+                    seen_labels.add(label_key)
+                    print(f"       ✓ Unlabeled input: '{label_text[:40]}'")
+            except Exception as e:
+                print(f"    ⚠️  Unlabeled input detection error: {e}")
 
             # ----- DETECT DATE PICKER BUTTONS -----
             try:
@@ -547,26 +617,79 @@ class BrowserExecutor:
                 print(f"    ⚠️  Date picker detection error: {e}")
             # --------------------------------------
 
-            # ----- DETECT SALARY FIELDS -----
+            # ----- DETECT FIELDS WITHOUT LABELS (SALARY, ETC.) -----
             try:
                 salary_xpath = (
-                    "//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "//input["
+                    "contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'salary') or "
+                    "contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'gehalt') or "
+                    "contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'annual') or "
+                    "contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
                     "'abcdefghijklmnopqrstuvwxyzäöü'), 'salary') or "
                     "contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
-                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'salary')]"
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'gehalt') or "
+                    "contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'salary') or "
+                    "contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', "
+                    "'abcdefghijklmnopqrstuvwxyzäöü'), 'gehalt')"
+                    "]"
                 )
                 salary_inputs = self.driver.find_elements(By.XPATH, salary_xpath)
                 for inp in salary_inputs:
-                    label = inp.get_attribute('placeholder') or inp.get_attribute('name') or 'Salary'
+                    if not inp.is_displayed():
+                        continue
+
+                    input_type = inp.get_attribute('type') or 'text'
+                    step = inp.get_attribute('step')
+                    pattern = inp.get_attribute('pattern')
+                    input_mode = inp.get_attribute('inputmode')
+                    is_numeric = (
+                        input_type == 'number'
+                        or bool(step)
+                        or (pattern and re.search(r"\\d|\d", pattern))
+                        or (input_mode and input_mode.lower() in ['numeric', 'decimal'])
+                    )
+
+                    label_text = ""
+                    try:
+                        prev = inp.find_element(By.XPATH, "./preceding-sibling::*[1][text()]")
+                        label_text = (prev.text or '').strip()
+                    except Exception:
+                        try:
+                            parent = inp.find_element(By.XPATH, "..")
+                            if (parent.text or '').strip():
+                                label_text = parent.text.strip()
+                        except Exception:
+                            pass
+
+                    if not label_text:
+                        label_text = (
+                            inp.get_attribute('placeholder')
+                            or inp.get_attribute('name')
+                            or 'Salary'
+                        )
+
+                    label_key = label_text.strip()
+                    if label_key in seen_labels:
+                        continue
                     inputs.append({
-                        'label': label,
-                        'type': inp.get_attribute('type') or 'text',
-                        'required': False
+                        'label': label_text,
+                        'type': input_type,
+                        'input_type': input_type,
+                        'is_numeric': is_numeric,
+                        'required': inp.get_attribute('required') is not None,
+                        'name': inp.get_attribute('name') or '',
+                        'placeholder': inp.get_attribute('placeholder') or '',
+                        'aria_label': inp.get_attribute('aria-label') or '',
                     })
-                    print(f"       ✓ Salary field: '{label}'")
+                    seen_labels.add(label_key)
+                    print(f"       ✓ Detected salary field: '{label_text}' (numeric: {is_numeric})")
             except Exception as e:
                 print(f"    ⚠️  Salary detection error: {e}")
-            # ---------------------------------
+            # -----------------------------------------------
 
             print(f"    DEBUG: Total inputs detected: {len(inputs)}")
 
@@ -1364,7 +1487,12 @@ class BrowserExecutor:
             pass
 
         dom_hash = self._compute_dom_hash()
-        page_type = self._detect_page_type(url, title, visible_text, buttons)
+        
+        # -------- STRONG SIGNAL: many form inputs = definitely an application form --------
+        if len(inputs) > 10:
+            page_type = "JOB_APPLICATION_FORM"
+        else:
+            page_type = self._detect_page_type(url, title, visible_text, buttons)
 
         return PageContext(
             url=url,
@@ -1387,17 +1515,20 @@ class BrowserExecutor:
 
         has_form_fields = any(x in text_lower for x in [
             'vorname', 'nachname', 'e-mail', 'email', 'telefon',
-            'phone', 'mobil', 'adresse', 'anschreiben', 'lebenslauf'
+            'phone', 'mobil', 'adresse', 'anschreiben', 'lebenslauf',
+            'first name', 'last name', 'address', 'city', 'postcode', 'zip',
+            'country', 'salary', 'cover letter', 'resume', 'cv', 'upload', 'file'
         ])
 
         has_apply_button = any(x in buttons_lower for x in [
             'jetzt bewerben', 'online bewerben', 'bewerben', 'apply now',
-            'apply', 'online-bewerbung'
+            'apply', 'online-bewerbung', 'apply for position'
         ])
 
         is_job_portal = any(x in text_lower for x in [
             'jobbörse', 'jobs', 'stellenangebote', 'careers',
-            'job search', 'job overview', 'stellenanzeigen'
+            'job search', 'job overview', 'stellenanzeigen', 'see all jobs',
+            'browse jobs', 'search results'
         ]) or 'jobs-overview' in url_lower
 
         if has_form_fields:

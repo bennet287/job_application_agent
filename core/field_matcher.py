@@ -61,6 +61,35 @@ class FieldMatcher:
         'website': ['website', 'homepage', 'portfolio', 'personal website'],
         'resume': ['resume', 'cv', 'lebenslauf', 'upload cv', 'upload résumé', 'curriculum vitae'],
         'cover_letter': ['cover letter', 'anschreiben', 'motivation letter', 'motivational letter', 'upload cover letter'],
+        # ----- SITE-SPECIFIC FIELDS (complex forms) -----
+        'relocation': [
+            'yes, i would like to relocate', 'no, i don´t want to relocate',
+            'willing to relocate', 'relocation', 'ready to move'
+        ],
+        'portfolio': [
+            'link to your portfolio', 'portfolio', 'portfolio link', 'your portfolio'
+        ],
+        'source': [
+            'how did you learn about us', 'how did you hear about us',
+            'where did you find this job', 'source', 'direct contact',
+            'beyond now website', 'at_karriere', 'linkedin', 'employee referral'
+        ],
+        'travel_willingness': [
+            'how high is your willingness to travel', 'willingness to travel',
+            'travel willingness', 'how often can you travel', 'travel percentage'
+        ],
+        'industries': [
+            'in which industries have you worked', 'industries worked in',
+            'industries', 'work experience sectors', 'industry experience'
+        ],
+        'notice_period': [
+            'how long is your period of notice', 'period of notice', 'notice period',
+            'notice', 'how much notice', 'notice time'
+        ],
+        'hours_per_week': [
+            'how many hours would you like to work', 'how many hours per week',
+            'working hours', 'hours per week', 'hours per week preferred'
+        ],
     }
 
     @classmethod
@@ -84,6 +113,10 @@ class FieldMatcher:
                 return None
         
         for fact_key, patterns in cls.FIELD_PATTERNS.items():
+            if fact_key == 'country' and 'county' in label_clean:
+                continue
+            if fact_key == 'county' and 'country' in label_clean:
+                continue
             # Check if any pattern is a substring or fuzzy match
             for pattern in patterns:
                 # Direct substring match

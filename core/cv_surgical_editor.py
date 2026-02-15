@@ -204,46 +204,41 @@ Nice-to-haves: {jd_data.get('nice_to_haves', [])}
 CURRENT CV BULLETS:
 {json.dumps(current_bullets[:5], indent=2)}
 
-TAILORING INSTRUCTIONS:
-1. You MUST suggest at least ONE rewrite. It is not allowed to return an empty array.
+INSTRUCTIONS:
+1. Suggest at least ONE rewrite (or empty array if CV is perfect).
 2. MAX {max_changes} rewrites.
-3. ONLY rephrase existing content – never invent new experience.
-4. Preserve all numbers and metrics exactly.
-5. Incorporate job keywords naturally.
-6. If the CV already matches well, still suggest 1-2 minor improvements:
-   - Reorder bullet points to put most relevant first
-   - Use stronger action verbs (e.g., "orchestrated", "engineered", "optimized")
-   - Highlight keywords from the job requirements
-   - Combine two related bullets into one stronger statement
+3. Only rephrase – never invent experience.
+4. Preserve all numbers/metrics exactly.
+5. Add job keywords naturally.
 
-Return a JSON array of changes – AT LEAST ONE ELEMENT.
-If you truly cannot make any improvement, return a single change that rephrases the first bullet slightly.
-[
-  {{
-    "bullet_index": 0,
-    "original": "original text",
-    "new": "improved text",
-    "reason": "why this improves the match"
-  }}
-]"""
+Return ONLY a JSON array. No explanations.
+[{{"bullet_index": 0, "original": "text", "new": "improved", "reason": "..."}}]
+"""
 
         try:
             # ---------- LLM CALL ----------
             response = self.llm.generate(prompt)
+            print(f"    [DEBUG] LLM response length: {len(response) if response else 0}")
+            if response:
+                print(f"    [DEBUG] Preview: {response[:120]}...")
             # ---------- END LLM CALL ----------
 
             # --- Parse LLM response ---
             changes = []
             try:
-                # Try to extract JSON
-                json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
+                # Try markdown code block first
+                json_match = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', response, re.DOTALL)
                 if json_match:
                     changes = json.loads(json_match.group(1))
+                elif response.strip().startswith('['):
+                    changes = json.loads(response.strip())
                 else:
-                    # Try to parse whole response as JSON
-                    changes = json.loads(response)
+                    # Extract JSON array from response
+                    json_match = re.search(r'\[.*\]', response, re.DOTALL)
+                    if json_match:
+                        changes = json.loads(json_match.group(0))
             except Exception as e:
-                print(f"    ⚠️  Failed to parse LLM response: {e}")
+                print(f"    ⚠️  Parse failed: {e}")
 
             # --- Validate and filter ---
             valid_changes = []
@@ -251,29 +246,39 @@ If you truly cannot make any improvement, return a single change that rephrases 
                 if self._validate_change(change, current_bullets):
                     valid_changes.append(change)
 
-            # --- HARD FALLBACK: if no changes, create one ourselves ---
+            # --- INTELLIGENT FALLBACK ---
             if not valid_changes and current_bullets:
-                print("    ⚠️  LLM suggested no changes – forcing a minor rewrite.")
-                # Take the first bullet and rephrase it slightly
-                first_idx = 0
-                original = current_bullets[first_idx]
-                # Simple rephrase: add a strong action verb if missing
-                if not any(verb in original.lower() for verb in ['led', 'managed', 'developed', 'engineered', 'optimized']):
-                    new = "Led " + original[0].lower() + original[1:]
-                else:
-                    # Otherwise just add "Successfully" at the front
-                    new = "Successfully " + original[0].lower() + original[1:]
+                import random
+                print("    ⚠️  No changes from LLM – creating intelligent fallback.")
                 
-                # Create a fallback change
-                fallback_change = {
-                    "bullet_index": first_idx,
+                verbs = [
+                    'Orchestrated', 'Engineered', 'Optimized', 'Spearheaded',
+                    'Architected', 'Automated', 'Streamlined', 'Deployed',
+                    'Implemented', 'Enhanced', 'Designed', 'Directed'
+                ]
+                
+                # Pick random bullet (not always first)
+                idx = random.randint(0, min(2, len(current_bullets) - 1))
+                original = current_bullets[idx]
+                
+                # Check for existing strong verb
+                has_strong_verb = any(v.lower() in original.lower() for v in verbs)
+                
+                if not has_strong_verb:
+                    verb = random.choice(verbs)
+                    new = f"{verb} {original[0].lower()}{original[1:]}"
+                else:
+                    new = f"Successfully {original[0].lower()}{original[1:]}"
+                
+                fallback = {
+                    "bullet_index": idx,
                     "original": original,
                     "new": new,
-                    "reason": "Minor rephrase to ensure CV optimization"
+                    "reason": "Enhanced verb for impact"
                 }
-                if self._validate_change(fallback_change, current_bullets):
-                    valid_changes.append(fallback_change)
-                    print(f"    ✅ Created fallback change: {original[:40]}... → {new[:40]}...")
+                if self._validate_change(fallback, current_bullets):
+                    valid_changes.append(fallback)
+                    print(f"    ✅ Fallback: {original[:35]}... → {new[:35]}...")
 
             # --- Apply changes ---
             if not valid_changes:

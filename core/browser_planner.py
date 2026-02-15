@@ -28,6 +28,7 @@ class ContextAwarePlanner:
                 "CLICK|Jetzt bewerben",
                 "WAIT|5",
                 "REPORT|Switch to form tab",
+                "REPORT|Check for cookies",
             ])
         return [Action.parse(a) for a in base if Action.parse(a)]
 
@@ -40,7 +41,13 @@ class ContextAwarePlanner:
         
         for inp in context.inputs:
             # Use the EXACT label text from the form detection
-            exact_label = inp.get('label', '')
+            exact_label = (
+                inp.get('label')
+                or inp.get('placeholder')
+                or inp.get('name')
+                or inp.get('aria_label')
+                or ''
+            )
             label_lower = exact_label.lower()
             input_type = inp.get('type', 'text')
             detected_input_type = inp.get('input_type', input_type)
@@ -88,10 +95,22 @@ class ContextAwarePlanner:
             match = FieldMatcher.match_field(exact_label, prepared_facts)
             if match:
                 fact_key, value = match
+                is_numeric_field = inp.get('is_numeric', False)
                 
                 if not value and not is_required:
                     print(f"       ⚠ {exact_label} → no data, skip")
                     continue
+
+                if fact_key == 'salary_expectation' and is_numeric_field:
+                    if isinstance(value, str) and value.strip().lower() == 'negotiable':
+                        value = 50000
+                        print(f"       ⚠ {exact_label} → numeric field, using default {value}")
+                    else:
+                        try:
+                            value = int(float(str(value).replace(',', '').replace('.', '')))
+                        except Exception:
+                            value = 50000
+                            print(f"       ⚠ {exact_label} → invalid numeric, using default {value}")
                 
                 # Determine action type
                 if input_type == 'file' or 'upload' in label_lower:
